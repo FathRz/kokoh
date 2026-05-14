@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-turbopack)",
+      "Bash(export PATH=\"$HOME/.nvm/versions/node/v22.17.0/bin:$PATH\")",
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(mkdir -p /Users/fathu/project/kokoh/src/components/ui)",
+      "Bash(mkdir -p /Users/fathu/project/kokoh/src/components/layout)",
+      "Bash(mkdir -p /Users/fathu/project/kokoh/src/components/shared)",
+      "Bash(mkdir -p /Users/fathu/project/kokoh/src/lib/supabase)",
+      "Bash(mkdir -p /Users/fathu/project/kokoh/src/lib/db)",
+      "Bash(mkdir -p \"/Users/fathu/project/kokoh/src/app/\\(auth\\)/login\")",
+      "Bash(mkdir -p \"/Users/fathu/project/kokoh/src/app/\\(auth\\)/register\")",
+      "Bash(mkdir -p \"/Users/fathu/project/kokoh/src/app/\\(dashboard\\)/projects\")",
+      "Bash(mkdir -p \"/Users/fathu/project/kokoh/src/app/\\(dashboard\\)/reports\")",
+      "Bash(mkdir -p \"/Users/fathu/project/kokoh/src/app/\\(dashboard\\)/logistics\")",
+      "Bash(npm run *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(node scripts/test-connection.mjs)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/login)",
+      "Bash(npm list *)",
+      "Bash(node scripts/generate-favicon.mjs)",
+      "Bash(pkill -f \"next dev\")",
+      "Bash(node -e ' *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/kokoh-logo.png)",
+      "Bash(gh api *)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

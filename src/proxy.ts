@@ -1,7 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_ROUTES = ["/login", "/register", "/"];
+const PUBLIC_ROUTES = ["/login", "/register", "/", "/set-password", "/forgot-password", "/verify-email"];
+const PUBLIC_PREFIXES = ["/auth/"];
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -32,7 +33,9 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
-  const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname === route);
+  const isPublicRoute =
+    PUBLIC_ROUTES.some((route) => pathname === route) ||
+    PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 
   if (!user && !isPublicRoute) {
     return NextResponse.redirect(new URL("/login", request.url));
@@ -47,6 +50,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|icons|manifest.json|sw.js|workbox-.*\\.js).*)",
+    "/((?!_next/static|_next/image|favicon.ico|favicon-32.png|apple-touch-icon.png|icons|manifest.json|sw.js|workbox-.*\\.js|.*\\.png$|.*\\.jpg$|.*\\.jpeg$|.*\\.svg$|.*\\.webp$).*)",
   ],
 };

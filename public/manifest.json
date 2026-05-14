@@ -1,11 +1,11 @@
 {
-  "name": "Kokoh - Manajemen Proyek Konstruksi",
+  "name": "Kokoh - Management Kontraktor",
   "short_name": "Kokoh",
   "description": "Platform SaaS untuk kontraktor dan developer perumahan Indonesia",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#f97316",
+  "background_color": "#1C2A5E",
+  "theme_color": "#1C2A5E",
   "orientation": "portrait-primary",
   "icons": [
     {

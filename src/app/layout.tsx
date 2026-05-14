@@ -1,17 +1,25 @@
 import type { Metadata, Viewport } from "next";
-import { Geist } from "next/font/google";
+import { Outfit } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const outfit = Outfit({
+  variable: "--font-outfit",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "Kokoh - Manajemen Proyek Konstruksi",
+  title: "Kokoh - Management Kontraktor",
   description:
     "Platform SaaS untuk kontraktor dan developer perumahan Indonesia. Sinkronisasi real-time antara kantor dan lapangan.",
   manifest: "/manifest.json",
+  icons: {
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+    ],
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180" },
+    ],
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
@@ -20,7 +28,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f97316",
+  themeColor: "#465fff",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
@@ -32,8 +40,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="id" className={`${geistSans.variable} h-full antialiased`}>
-      <body className="min-h-full bg-gray-50 text-gray-900">{children}</body>
+    <html lang="id" className={`${outfit.variable} h-full`}>
+      <body className="min-h-full bg-gray-50 text-gray-900 antialiased">{children}</body>
     </html>
   );
 }
