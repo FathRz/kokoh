@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { UserPlus, X, Pencil, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { Eye, EyeOff } from "lucide-react";
-import { createMember, updateMember } from "./actions";
+import { createMember, updateMember, resetMemberPassword } from "./actions";
 import type { ProfileRow } from "./page";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -51,6 +52,7 @@ interface InviteForm {
 }
 
 interface EditForm {
+  full_name: string;
   role: string;
   is_active: boolean;
 }
@@ -81,6 +83,8 @@ function MemberAvatar({ name }: { name: string }) {
 }
 
 export default function TeamTab({ currentUserId, members, isOwner }: Props) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
   const [showInvite, setShowInvite] = useState(false);
   const [editTarget, setEditTarget] = useState<ProfileRow | null>(null);
 
@@ -89,14 +93,35 @@ export default function TeamTab({ currentUserId, members, isOwner }: Props) {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  const [editForm, setEditForm] = useState<EditForm>({ role: "site_manager", is_active: true });
+  const [editForm, setEditForm] = useState<EditForm>({ full_name: "", role: "site_manager", is_active: true });
   const [editLoading, setEditLoading] = useState(false);
   const [editMsg, setEditMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const [newPassword, setNewPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+
   function openEdit(member: ProfileRow) {
     setEditTarget(member);
-    setEditForm({ role: member.role, is_active: member.is_active });
+    setEditForm({ full_name: member.full_name, role: member.role, is_active: member.is_active });
     setEditMsg(null);
+    setNewPassword("");
+    setShowNewPassword(false);
+  }
+
+  async function handleResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    setResetLoading(true);
+    setEditMsg(null);
+    const result = await resetMemberPassword(editTarget.id, newPassword);
+    setResetLoading(false);
+    if (result?.error) {
+      setEditMsg({ type: "error", text: result.error });
+    } else {
+      setEditMsg({ type: "success", text: "Password berhasil direset" });
+      setNewPassword("");
+    }
   }
 
   async function handleInvite(e: React.FormEvent) {
@@ -110,6 +135,7 @@ export default function TeamTab({ currentUserId, members, isOwner }: Props) {
     } else {
       setInviteMsg({ type: "success", text: `Akun berhasil dibuat untuk ${inviteForm.email}` });
       setInviteForm({ email: "", full_name: "", role: "site_manager", password: "" });
+      startTransition(() => router.refresh());
     }
   }
 
@@ -124,6 +150,7 @@ export default function TeamTab({ currentUserId, members, isOwner }: Props) {
       setEditMsg({ type: "error", text: result.error });
     } else {
       setEditMsg({ type: "success", text: "Anggota berhasil diperbarui" });
+      startTransition(() => router.refresh());
     }
   }
 
@@ -146,7 +173,15 @@ export default function TeamTab({ currentUserId, members, isOwner }: Props) {
       </div>
 
       {/* Members table */}
-      <div className="rounded-xl border border-gray-100 overflow-hidden">
+      <div className="relative rounded-xl border border-gray-100 overflow-hidden">
+        {isPending && (
+          <div className="absolute inset-0 z-10 bg-white/65 flex items-center justify-center">
+            <div className="flex items-center gap-2 bg-white rounded-full px-3.5 py-2 shadow-sm border border-gray-100">
+              <span className="block w-3.5 h-3.5 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
+              <span className="text-xs font-medium text-gray-500">Memperbarui...</span>
+            </div>
+          </div>
+        )}
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
@@ -314,13 +349,26 @@ export default function TeamTab({ currentUserId, members, isOwner }: Props) {
         <Modal title="Edit Anggota" onClose={() => setEditTarget(null)}>
           <form onSubmit={handleEdit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Nama</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Nama Lengkap <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
-                value={editTarget.full_name}
+                required
+                value={editForm.full_name}
+                onChange={(e) => setEditForm((f) => ({ ...f, full_name: e.target.value }))}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>
+              <input
+                type="text"
+                value={editTarget.email ?? "—"}
                 disabled
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-400 cursor-not-allowed"
               />
+              <p className="text-xs text-gray-400 mt-1">Email tidak dapat diubah</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Role</label>
@@ -388,6 +436,39 @@ export default function TeamTab({ currentUserId, members, isOwner }: Props) {
               </button>
             </div>
           </form>
+
+          {/* Reset password — form terpisah agar tidak campur submit */}
+          <div className="mt-6 pt-5 border-t border-gray-100">
+            <p className="text-sm font-medium text-gray-700 mb-3">Reset Password</p>
+            <form onSubmit={handleResetPassword} className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showNewPassword ? "text" : "password"}
+                  required
+                  minLength={8}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 pr-10 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition-all"
+                  placeholder="Password baru (min. 8 karakter)"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <button
+                type="submit"
+                disabled={resetLoading || newPassword.length < 8}
+                className="px-4 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+              >
+                {resetLoading ? "..." : "Reset"}
+              </button>
+            </form>
+            <p className="text-xs text-gray-400 mt-1.5">Bagikan password baru ini langsung kepada anggota.</p>
+          </div>
         </Modal>
       )}
     </div>

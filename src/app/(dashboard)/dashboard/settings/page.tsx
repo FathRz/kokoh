@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import SettingsTabs from "./SettingsTabs";
+import type { PerumahanRow } from "./PerumahanTab";
 
 export type ProfileRow = {
   id: string;
@@ -9,6 +11,7 @@ export type ProfileRow = {
   phone: string | null;
   is_active: boolean;
   created_at: string;
+  email?: string;
 };
 
 export type TenantRow = {
@@ -44,7 +47,57 @@ export default async function SettingsPage() {
     .eq("tenant_id", tenant.id)
     .order("created_at", { ascending: true });
 
-  const members = (rawMembers ?? []) as ProfileRow[];
+  const profiles = (rawMembers ?? []) as ProfileRow[];
+
+  let members = profiles;
+  try {
+    const admin = createAdminClient();
+    const { data: { users } } = await admin.auth.admin.listUsers({ perPage: 1000 });
+    const emailMap = new Map(users.map((u) => [u.id, u.email ?? ""]));
+    members = profiles.map((p) => ({ ...p, email: emailMap.get(p.id) ?? "" }));
+  } catch {
+    // fallback tanpa email
+  }
+
+  // Fetch perumahan + blok + active project info
+  const { data: rawPerumahan } = await supabase
+    .from("perumahan")
+    .select("id, name")
+    .eq("tenant_id", tenant.id)
+    .order("name");
+
+  const { data: rawBlok } = await supabase
+    .from("blok")
+    .select("id, nomor, perumahan_id")
+    .eq("tenant_id", tenant.id)
+    .order("nomor");
+
+  // Fetch projects that have blok_id assigned to show blok usage
+  const { data: rawProjects } = await supabase
+    .from("projects")
+    .select("id, name, status, blok_id")
+    .eq("tenant_id", tenant.id)
+    .not("blok_id", "is", null);
+
+  type BlokUsage = { id: string; nomor: string; perumahan_id: string };
+  type ProjectUsage = { id: string; name: string; status: string; blok_id: string };
+
+  const blokList = (rawBlok ?? []) as BlokUsage[];
+  const projectList = (rawProjects ?? []) as ProjectUsage[];
+  const projectByBlok = new Map(projectList.map((p) => [p.blok_id, p]));
+
+  const perumahan: PerumahanRow[] = (rawPerumahan ?? []).map((p) => ({
+    id: (p as unknown as { id: string }).id,
+    name: (p as unknown as { name: string }).name,
+    blok: blokList
+      .filter((b) => b.perumahan_id === (p as unknown as { id: string }).id)
+      .map((b) => ({
+        id: b.id,
+        nomor: b.nomor,
+        perumahan_id: b.perumahan_id,
+        project: projectByBlok.get(b.id) ?? null,
+      })),
+  }));
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -69,6 +122,7 @@ export default async function SettingsPage() {
         members={members}
         tenant={tenant}
         isOwner={isOwner}
+        perumahan={perumahan}
       />
     </div>
   );
