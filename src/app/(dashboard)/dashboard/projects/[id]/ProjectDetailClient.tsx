@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ChevronLeft, Info, ListTree, FileText } from "lucide-react";
 import Link from "next/link";
-import { ProjectDetail, WbsItem, ProjectFile, PerumahanOpt, BlokOpt } from "./page";
+import { ProjectDetail, WbsItem, ProjectFile, PerumahanOpt, BlokOpt, MemberOpt } from "./page";
 import ProjectInfoTab from "./ProjectInfoTab";
 import WbsTab from "./WbsTab";
 import DocumentsTab from "./DocumentsTab";
@@ -39,9 +39,10 @@ interface Props {
   tenantId: string;
   perumahanOptions: PerumahanOpt[];
   blokOptions: BlokOpt[];
+  memberOptions: MemberOpt[];
 }
 
-export default function ProjectDetailClient({ project, wbsItems, projectFiles, tenantId, perumahanOptions, blokOptions }: Props) {
+export default function ProjectDetailClient({ project, wbsItems, projectFiles, tenantId, perumahanOptions, blokOptions, memberOptions }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>("info");
 
   return (
@@ -109,6 +110,7 @@ export default function ProjectDetailClient({ project, wbsItems, projectFiles, t
             project={project}
             perumahanOptions={perumahanOptions}
             blokOptions={blokOptions}
+            memberOptions={memberOptions}
           />
         )}
         {activeTab === "wbs" && <WbsTab project={project} wbsItems={wbsItems} />}

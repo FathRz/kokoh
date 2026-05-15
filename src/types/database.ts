@@ -61,6 +61,8 @@ export interface Database {
           end_date: string | null;
           budget_total: number;
           description: string | null;
+          pm_id: string | null;
+          site_manager_id: string | null;
           created_by: string;
           created_at: string;
           updated_at: string;

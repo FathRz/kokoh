@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { FolderPlus, MapPin, Calendar, TrendingUp, Folder, Search, Home } from "lucide-react";
-import { ProjectRow, PerumahanOption, BlokOption } from "./page";
+import { ProjectRow, PerumahanOption, BlokOption, MemberOption } from "./page";
 import CreateProjectModal from "./CreateProjectModal";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -35,6 +35,7 @@ interface Props {
   projects: ProjectRow[];
   perumahanOptions: PerumahanOption[];
   blokOptions: BlokOption[];
+  memberOptions: MemberOption[];
 }
 
 const STATUS_FILTER_OPTIONS = [
@@ -45,7 +46,7 @@ const STATUS_FILTER_OPTIONS = [
   { value: "completed", label: "Selesai" },
 ];
 
-export default function ProjectsClient({ projects, perumahanOptions, blokOptions }: Props) {
+export default function ProjectsClient({ projects, perumahanOptions, blokOptions, memberOptions }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -164,6 +165,7 @@ export default function ProjectsClient({ projects, perumahanOptions, blokOptions
           onClose={() => setShowCreate(false)}
           perumahanOptions={perumahanOptions}
           blokOptions={blokOptions}
+          memberOptions={memberOptions}
         />
       )}
     </>

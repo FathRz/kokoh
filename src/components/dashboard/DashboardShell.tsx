@@ -4,6 +4,7 @@ import { SidebarProvider, useSidebar } from "@/context/SidebarContext";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import Backdrop from "./Backdrop";
+import BottomNav from "./BottomNav";
 
 interface Props {
   children: React.ReactNode;
@@ -24,9 +25,10 @@ function ContentArea({ children, fullName, email, role, tenantName }: Props) {
       }`}
     >
       <Header fullName={fullName} email={email} role={role} tenantName={tenantName} />
-      <main className="flex-1 p-4 md:p-6 max-w-screen-2xl mx-auto w-full">
+      <main className="flex-1 p-4 md:p-6 max-w-screen-2xl mx-auto w-full pb-20 md:pb-6">
         {children}
       </main>
+      <BottomNav />
     </div>
   );
 }

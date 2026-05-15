@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Edit2, Trash2, MapPin, Calendar, DollarSign, FileText, Home, Layers, X, Check, AlertTriangle } from "lucide-react";
-import { ProjectDetail, PerumahanOpt, BlokOpt } from "./page";
+import { Edit2, Trash2, MapPin, Calendar, DollarSign, FileText, Home, Layers, X, Check, AlertTriangle, User, HardHat } from "lucide-react";
+import { ProjectDetail, PerumahanOpt, BlokOpt, MemberOpt } from "./page";
 import { updateProject, deleteProject } from "../actions";
 import CurrencyInput from "@/components/ui/CurrencyInput";
 
@@ -28,9 +28,10 @@ interface Props {
   project: ProjectDetail;
   perumahanOptions: PerumahanOpt[];
   blokOptions: BlokOpt[];
+  memberOptions: MemberOpt[];
 }
 
-export default function ProjectInfoTab({ project, perumahanOptions, blokOptions }: Props) {
+export default function ProjectInfoTab({ project, perumahanOptions, blokOptions, memberOptions }: Props) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
@@ -47,7 +48,12 @@ export default function ProjectInfoTab({ project, perumahanOptions, blokOptions 
     description: project.description ?? "",
     perumahan_id: project.perumahan_id ?? "",
     blok_id: project.blok_id ?? "",
+    pm_id: project.pm_id ?? "",
+    site_manager_id: project.site_manager_id ?? "",
   });
+
+  const pmOptions = memberOptions.filter((m) => m.role === "project_manager" || m.role === "tenant_owner");
+  const siteManagerOptions = memberOptions.filter((m) => m.role === "site_manager" || m.role === "tenant_owner");
 
   const availableBlok = blokOptions.filter(
     (b) => b.perumahan_id === form.perumahan_id && (!b.taken || b.id === project.blok_id)
@@ -75,6 +81,8 @@ export default function ProjectInfoTab({ project, perumahanOptions, blokOptions 
       description: form.description,
       perumahan_id: form.perumahan_id || null,
       blok_id: form.blok_id || null,
+      pm_id: form.pm_id || null,
+      site_manager_id: form.site_manager_id || null,
     });
     setLoading(false);
     if (result?.error) { setError(result.error); return; }
@@ -153,6 +161,30 @@ export default function ProjectInfoTab({ project, perumahanOptions, blokOptions 
               {availableBlok.map((b) => (
                 <option key={b.id} value={b.id}>Blok {b.nomor}</option>
               ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Project Manager</label>
+            <select
+              value={form.pm_id}
+              onChange={(e) => setField("pm_id", e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent bg-white"
+            >
+              <option value="">— Tidak dipilih —</option>
+              {pmOptions.map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Site Manager (Mandor)</label>
+            <select
+              value={form.site_manager_id}
+              onChange={(e) => setField("site_manager_id", e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent bg-white"
+            >
+              <option value="">— Tidak dipilih —</option>
+              {siteManagerOptions.map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}
             </select>
           </div>
 
@@ -249,6 +281,8 @@ export default function ProjectInfoTab({ project, perumahanOptions, blokOptions 
           {project.blok_nomor && (
             <InfoRow icon={Layers} label="Nomor Blok" value={`Blok ${project.blok_nomor}`} />
           )}
+          <InfoRow icon={User} label="Project Manager" value={project.pm_name ?? "-"} />
+          <InfoRow icon={HardHat} label="Site Manager (Mandor)" value={project.site_manager_name ?? "-"} />
           <InfoRow icon={MapPin} label="Lokasi" value={project.location ?? "-"} />
           <InfoRow
             icon={DollarSign}

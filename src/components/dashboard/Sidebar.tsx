@@ -45,8 +45,7 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
       },
       {
         href: "/dashboard/reports",
-        label: "Laporan Lapangan",
-        badge: "NEW",
+        label: "Laporan Harian",
         icon: <ClipboardList className="w-5 h-5" />,
       },
       {

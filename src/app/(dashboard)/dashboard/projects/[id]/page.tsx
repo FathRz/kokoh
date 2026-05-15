@@ -32,6 +32,10 @@ export type ProjectDetail = {
   blok_id: string | null;
   perumahan_name: string | null;
   blok_nomor: string | null;
+  pm_id: string | null;
+  pm_name: string | null;
+  site_manager_id: string | null;
+  site_manager_name: string | null;
 };
 
 export type ProjectFile = {
@@ -45,6 +49,7 @@ export type ProjectFile = {
 
 export type PerumahanOpt = { id: string; name: string };
 export type BlokOpt = { id: string; nomor: string; perumahan_id: string; taken: boolean };
+export type MemberOpt = { id: string; full_name: string; role: string };
 
 export default async function ProjectDetailPage({
   params,
@@ -68,7 +73,7 @@ export default async function ProjectDetailPage({
 
   const { data: rawProject } = await supabase
     .from("projects")
-    .select("id, name, code, location, status, start_date, end_date, budget_total, description, created_at, perumahan_id, blok_id, perumahan(name), blok(nomor)")
+    .select("id, name, code, location, status, start_date, end_date, budget_total, description, created_at, perumahan_id, blok_id, pm_id, site_manager_id, perumahan(name), blok(nomor), pm_profile:profiles!pm_id(full_name), site_manager_profile:profiles!site_manager_id(full_name)")
     .eq("id", id)
     .eq("tenant_id", tenantId)
     .single();
@@ -80,8 +85,11 @@ export default async function ProjectDetailPage({
     status: string; start_date: string | null; end_date: string | null;
     budget_total: number; description: string | null; created_at: string;
     perumahan_id: string | null; blok_id: string | null;
+    pm_id: string | null; site_manager_id: string | null;
     perumahan: { name: string } | null;
     blok: { nomor: string } | null;
+    pm_profile: { full_name: string } | null;
+    site_manager_profile: { full_name: string } | null;
   };
 
   const rp = rawProject as unknown as RawProject;
@@ -92,6 +100,8 @@ export default async function ProjectDetailPage({
     perumahan_id: rp.perumahan_id, blok_id: rp.blok_id,
     perumahan_name: rp.perumahan?.name ?? null,
     blok_nomor: rp.blok?.nomor ?? null,
+    pm_id: rp.pm_id, pm_name: rp.pm_profile?.full_name ?? null,
+    site_manager_id: rp.site_manager_id, site_manager_name: rp.site_manager_profile?.full_name ?? null,
   };
 
   const { data: rawWbs } = await supabase
@@ -139,6 +149,20 @@ export default async function ProjectDetailPage({
     return { id: bb.id, nomor: bb.nomor, perumahan_id: bb.perumahan_id, taken: takenBlokIds.has(bb.id) };
   });
 
+  const { data: rawMembers } = await supabase
+    .from("profiles")
+    .select("id, full_name, role")
+    .eq("tenant_id", tenantId)
+    .eq("is_active", true)
+    .in("role", ["project_manager", "site_manager", "tenant_owner"])
+    .order("full_name");
+
+  const memberOptions: MemberOpt[] = (rawMembers ?? []).map((m) => ({
+    id: (m as unknown as { id: string }).id,
+    full_name: (m as unknown as { full_name: string }).full_name,
+    role: (m as unknown as { role: string }).role,
+  }));
+
   return (
     <ProjectDetailClient
       project={project}
@@ -147,6 +171,7 @@ export default async function ProjectDetailPage({
       tenantId={tenantId}
       perumahanOptions={perumahanOptions}
       blokOptions={blokOptions}
+      memberOptions={memberOptions}
     />
   );
 }

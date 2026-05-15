@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { X, FolderPlus } from "lucide-react";
 import { createProject } from "./actions";
-import type { PerumahanOption, BlokOption } from "./page";
+import type { PerumahanOption, BlokOption, MemberOption } from "./page";
 import CurrencyInput from "@/components/ui/CurrencyInput";
 
 const STATUS_OPTIONS = [
@@ -17,9 +17,10 @@ interface Props {
   onClose: () => void;
   perumahanOptions: PerumahanOption[];
   blokOptions: BlokOption[];
+  memberOptions: MemberOption[];
 }
 
-export default function CreateProjectModal({ onClose, perumahanOptions, blokOptions }: Props) {
+export default function CreateProjectModal({ onClose, perumahanOptions, blokOptions, memberOptions }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +35,12 @@ export default function CreateProjectModal({ onClose, perumahanOptions, blokOpti
     description: "",
     perumahan_id: "",
     blok_id: "",
+    pm_id: "",
+    site_manager_id: "",
   });
+
+  const pmOptions = memberOptions.filter((m) => m.role === "project_manager" || m.role === "tenant_owner");
+  const siteManagerOptions = memberOptions.filter((m) => m.role === "site_manager" || m.role === "tenant_owner");
 
   const availableBlokForSelected = blokOptions.filter(
     (b) => b.perumahan_id === form.perumahan_id && !b.taken
@@ -67,6 +73,8 @@ export default function CreateProjectModal({ onClose, perumahanOptions, blokOpti
       budget_total: parseFloat(form.budget_total) || 0,
       perumahan_id: form.perumahan_id || null,
       blok_id: form.blok_id || null,
+      pm_id: form.pm_id || null,
+      site_manager_id: form.site_manager_id || null,
     });
 
     setLoading(false);
@@ -174,6 +182,41 @@ export default function CreateProjectModal({ onClose, perumahanOptions, blokOpti
               </select>
               {form.perumahan_id && availableBlokForSelected.length === 0 && (
                 <p className="text-xs text-orange-500 mt-1">Semua blok sudah terpakai atau belum ada blok</p>
+              )}
+            </div>
+
+            {/* Tim Proyek */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Project Manager</label>
+              <select
+                value={form.pm_id}
+                onChange={(e) => set("pm_id", e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition-all bg-white"
+              >
+                <option value="">— Pilih PM —</option>
+                {pmOptions.map((m) => (
+                  <option key={m.id} value={m.id}>{m.full_name}</option>
+                ))}
+              </select>
+              {pmOptions.length === 0 && (
+                <p className="text-xs text-gray-400 mt-1">Belum ada anggota dengan role Project Manager</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Site Manager</label>
+              <select
+                value={form.site_manager_id}
+                onChange={(e) => set("site_manager_id", e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition-all bg-white"
+              >
+                <option value="">— Pilih Site Manager —</option>
+                {siteManagerOptions.map((m) => (
+                  <option key={m.id} value={m.id}>{m.full_name}</option>
+                ))}
+              </select>
+              {siteManagerOptions.length === 0 && (
+                <p className="text-xs text-gray-400 mt-1">Belum ada anggota dengan role Site Manager</p>
               )}
             </div>
 

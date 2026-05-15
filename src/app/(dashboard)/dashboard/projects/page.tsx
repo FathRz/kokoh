@@ -20,6 +20,7 @@ export type ProjectRow = {
 
 export type PerumahanOption = { id: string; name: string };
 export type BlokOption = { id: string; nomor: string; perumahan_id: string; taken: boolean };
+export type MemberOption = { id: string; full_name: string; role: string };
 
 export default async function ProjectsPage() {
   const supabase = await createClient();
@@ -84,6 +85,21 @@ export default async function ProjectsPage() {
     blok_nomor: p.blok?.nomor ?? null,
   }));
 
+  // Team members for PM & Site Manager assignment
+  const { data: rawMembers } = await supabase
+    .from("profiles")
+    .select("id, full_name, role")
+    .eq("tenant_id", tenantId)
+    .eq("is_active", true)
+    .in("role", ["project_manager", "site_manager", "tenant_owner"])
+    .order("full_name");
+
+  const memberOptions: MemberOption[] = (rawMembers ?? []).map((m) => ({
+    id: (m as unknown as { id: string }).id,
+    full_name: (m as unknown as { full_name: string }).full_name,
+    role: (m as unknown as { role: string }).role,
+  }));
+
   // Perumahan + blok options for create modal
   const { data: rawPerumahan } = await supabase
     .from("perumahan")
@@ -123,6 +139,7 @@ export default async function ProjectsPage() {
       projects={projects}
       perumahanOptions={perumahanOptions}
       blokOptions={blokOptions}
+      memberOptions={memberOptions}
     />
   );
 }

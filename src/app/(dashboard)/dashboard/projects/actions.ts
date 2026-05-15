@@ -38,6 +38,8 @@ export async function createProject(data: {
   description: string;
   perumahan_id: string | null;
   blok_id: string | null;
+  pm_id: string | null;
+  site_manager_id: string | null;
 }) {
   const ctx = await getCtx();
   if ("error" in ctx) return { error: ctx.error };
@@ -58,6 +60,8 @@ export async function createProject(data: {
       description: data.description.trim() || null,
       perumahan_id: data.perumahan_id || null,
       blok_id: data.blok_id || null,
+      pm_id: data.pm_id || null,
+      site_manager_id: data.site_manager_id || null,
     } as never)
     .select("id")
     .single();
@@ -77,6 +81,8 @@ export async function updateProject(id: string, data: {
   description?: string;
   perumahan_id?: string | null;
   blok_id?: string | null;
+  pm_id?: string | null;
+  site_manager_id?: string | null;
 }) {
   const ctx = await getCtx();
   if ("error" in ctx) return { error: ctx.error };
@@ -92,6 +98,8 @@ export async function updateProject(id: string, data: {
   if (data.description !== undefined) updates.description = data.description.trim() || null;
   if ("perumahan_id" in data) updates.perumahan_id = data.perumahan_id ?? null;
   if ("blok_id" in data) updates.blok_id = data.blok_id ?? null;
+  if ("pm_id" in data) updates.pm_id = data.pm_id ?? null;
+  if ("site_manager_id" in data) updates.site_manager_id = data.site_manager_id ?? null;
 
   const { error } = await supabase
     .from("projects")
