@@ -6,10 +6,10 @@ import {
   Sun, Cloud, CloudRain, Zap,
   Plus, Minus, Check, AlertCircle, WifiOff, RefreshCw,
   ClipboardList, Camera, X, Users, ChevronRight,
-  TrendingUp, Clock, CheckCircle, XCircle,
+  TrendingUp, Clock, CheckCircle, XCircle, Edit2,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
-import { submitDailyReport, saveReportPhoto } from "./actions";
+import { submitDailyReport, updateDailyReport, saveReportPhoto } from "./actions";
 import { offlineDB, type OfflineDailyReport } from "@/lib/db/offline";
 import type { ReportProject, ReportWbsItem, SubmittedReport, ReportPhoto } from "./page";
 import PhotoCapture from "./PhotoCapture";
@@ -21,6 +21,13 @@ const WEATHER_OPTIONS = [
   { value: "hujan_ringan", label: "Hujan",   icon: CloudRain, color: "text-blue-500 bg-blue-50 border-blue-300" },
   { value: "hujan_lebat",  label: "Deras",   icon: Zap,       color: "text-indigo-500 bg-indigo-50 border-indigo-300" },
 ] as const;
+
+const WEATHER_DISPLAY: Record<string, { label: string; Icon: React.ElementType; cls: string }> = {
+  cerah:        { label: "Cerah",   Icon: Sun,       cls: "text-yellow-500" },
+  berawan:      { label: "Berawan", Icon: Cloud,     cls: "text-gray-400"   },
+  hujan_ringan: { label: "Hujan",   Icon: CloudRain, cls: "text-blue-500"   },
+  hujan_lebat:  { label: "Deras",   Icon: Zap,       cls: "text-indigo-500" },
+};
 
 type ItemStatus = "idle" | "submitting" | "offline_saved" | "error";
 type PhotoEntry = ReportPhoto & { caption: string };
@@ -66,7 +73,35 @@ export default function TodayTasksView({
   const [photoTarget, setPhotoTarget] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  const [editTargetReportId, setEditTargetReportId] = useState<string | null>(null);
+  const [editingReport, setEditingReport] = useState<SubmittedReport | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+
+  function closeSheet() {
+    setActiveItemId(null);
+    setEditTargetReportId(null);
+    setEditingReport(null);
+  }
+
+  function handleEditReport(report: SubmittedReport, wbsItemId: string) {
+    setItemForms((prev) => ({
+      ...prev,
+      [wbsItemId]: {
+        ...prev[wbsItemId],
+        newProgress: report.actual_progress,
+        notes: report.notes ?? "",
+        status: "idle",
+        errorMsg: "",
+        photos: [],
+        reportId: report.id,
+      },
+    }));
+    setWeather(report.weather);
+    setLaborCount(report.labor_count);
+    setEditTargetReportId(report.id);
+    setEditingReport(report);
+    setActiveItemId(wbsItemId);
+  }
 
   // Derive: latest report per WBS (reportHistory sorted desc → first match is latest)
   const latestByWbs = new Map<string, SubmittedReport>();
@@ -205,6 +240,28 @@ export default function TodayTasksView({
     setItemField(wbsItemId, "status", "submitting");
     setItemField(wbsItemId, "errorMsg", "");
 
+    // Edit mode: update existing report
+    if (editTargetReportId) {
+      const result = await updateDailyReport(editTargetReportId, {
+        actual_progress: form.newProgress,
+        labor_count: laborCount,
+        weather,
+        notes: form.notes,
+      });
+      if (result?.error) {
+        setItemField(wbsItemId, "status", "error");
+        setItemField(wbsItemId, "errorMsg", result.error);
+      } else {
+        setItemForms((prev) => ({
+          ...prev,
+          [wbsItemId]: { ...prev[wbsItemId], status: "idle", notes: "", photos: [], errorMsg: "" },
+        }));
+        closeSheet();
+        router.refresh();
+      }
+      return;
+    }
+
     const payload = {
       project_id: selectedProjectId,
       wbs_item_id: wbsItemId,
@@ -223,7 +280,7 @@ export default function TodayTasksView({
       } as OfflineDailyReport);
       setPendingCount((c) => c + 1);
       setItemField(wbsItemId, "status", "offline_saved");
-      setActiveItemId(null);
+      closeSheet();
       return;
     }
 
@@ -232,7 +289,6 @@ export default function TodayTasksView({
       setItemField(wbsItemId, "status", "error");
       setItemField(wbsItemId, "errorMsg", result.error);
     } else {
-      // Reset to idle so they can submit another update; keep newProgress as the new baseline
       setItemForms((prev) => ({
         ...prev,
         [wbsItemId]: {
@@ -244,7 +300,7 @@ export default function TodayTasksView({
           reportId: result.id ?? null,
         },
       }));
-      setActiveItemId(null);
+      closeSheet();
       router.refresh();
     }
   }
@@ -356,6 +412,8 @@ export default function TodayTasksView({
                 const todayReports = todayByWbs[item.id] ?? [];
                 const latestTodayReport = todayReports[0] ?? null;
 
+                const wbsHistory = historyByWbs[item.id] ?? [];
+
                 return (
                   <WbsCard
                     key={item.id}
@@ -364,7 +422,10 @@ export default function TodayTasksView({
                     latestReport={latestReport}
                     latestTodayReport={latestTodayReport}
                     todayCount={todayReports.length}
+                    history={wbsHistory}
+                    today={today}
                     onOpen={() => setActiveItemId(item.id)}
+                    onEditReport={(report) => handleEditReport(report, item.id)}
                   />
                 );
               })}
@@ -379,7 +440,7 @@ export default function TodayTasksView({
           "fixed inset-0 z-40 bg-black/50 transition-opacity duration-300",
           activeItemId ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         )}
-        onClick={() => setActiveItemId(null)}
+        onClick={closeSheet}
       />
 
       {/* Bottom Sheet */}
@@ -405,8 +466,14 @@ export default function TodayTasksView({
                   <span className="font-mono text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
                     {activeItem.code}
                   </span>
-                  {/* Today's report count chip */}
-                  {(todayByWbs[activeItem.id]?.length ?? 0) > 0 && (
+                  {editingReport ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200">
+                      <Edit2 className="w-2.5 h-2.5" />
+                      Edit — {editingReport.report_date === today
+                        ? `Hari ini ${formatTime(editingReport.created_at)}`
+                        : formatShortDate(editingReport.report_date)}
+                    </span>
+                  ) : (todayByWbs[activeItem.id]?.length ?? 0) > 0 && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-600 border border-brand-200">
                       {todayByWbs[activeItem.id].length} laporan hari ini
                     </span>
@@ -415,7 +482,7 @@ export default function TodayTasksView({
                 <p className="font-semibold text-gray-900 text-sm leading-snug">{activeItem.name}</p>
               </div>
               <button
-                onClick={() => setActiveItemId(null)}
+                onClick={closeSheet}
                 className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 transition-colors shrink-0"
               >
                 <X className="w-4 h-4" />
@@ -550,6 +617,29 @@ export default function TodayTasksView({
               {/* Photos */}
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Foto Progres</p>
+                {/* Existing photos when editing */}
+                {editingReport && editingReport.photos.length > 0 && (
+                  <div className="mb-2">
+                    <p className="text-[10px] text-gray-400 mb-1.5">Foto yang sudah ada:</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {editingReport.photos.map((ph) => (
+                        <button
+                          key={ph.id}
+                          onClick={() => setLightboxUrl(ph.public_url)}
+                          className="group shrink-0"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={ph.public_url}
+                            alt={ph.caption ?? ""}
+                            className="w-20 h-20 object-cover rounded-xl border border-gray-200 group-hover:opacity-80 transition-opacity"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* New photos added this session */}
                 {activeForm.photos.length > 0 && (
                   <div className="flex gap-2 flex-wrap mb-3">
                     {activeForm.photos.map((photo) => (
@@ -587,7 +677,7 @@ export default function TodayTasksView({
                   )}
                 >
                   <Camera className="w-4 h-4" />
-                  {activeForm.reportId ? "Ambil Foto Progres" : "Simpan laporan dulu untuk foto"}
+                  {activeForm.reportId ? "Tambah Foto Progres" : "Simpan laporan dulu untuk foto"}
                 </button>
               </div>
 
@@ -602,34 +692,69 @@ export default function TodayTasksView({
                       const olderEntry = activeHistory[idx + 1];
                       const delta = olderEntry ? h.actual_progress - olderEntry.actual_progress : null;
                       const isToday = h.report_date === today;
+                      const W = WEATHER_DISPLAY[h.weather] ?? WEATHER_DISPLAY.berawan;
 
                       return (
-                        <div key={h.id} className="flex items-center gap-3 px-3 py-2.5 bg-gray-50 rounded-xl">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-gray-600">
+                        <div key={h.id} className="bg-gray-50 rounded-xl px-3 py-3 space-y-2">
+                          {/* Line 1: status dot + time + delta + progress + status label */}
+                          <div className="flex items-center gap-2">
+                            <HistoryStatusDot isApproved={h.is_approved} />
+                            <span className="text-xs font-medium text-gray-600">
                               {isToday
                                 ? `Hari ini ${formatTime(h.created_at)}`
                                 : `${formatShortDate(h.report_date)} ${formatTime(h.created_at)}`
                               }
-                            </p>
-                            {h.notes && (
-                              <p className="text-[10px] text-gray-400 line-clamp-1 mt-0.5">{h.notes}</p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
+                            </span>
                             {delta !== null && delta !== 0 && (
-                              <span className={cn(
-                                "text-[10px] font-bold",
+                              <span className={cn("text-[10px] font-bold",
                                 delta > 0 ? "text-green-500" : "text-red-500"
                               )}>
                                 {delta > 0 ? `+${delta.toFixed(0)}` : delta.toFixed(0)}%
                               </span>
                             )}
-                            <span className="text-sm font-bold text-gray-800 tabular-nums">
+                            <span className="text-sm font-bold text-gray-800 tabular-nums ml-auto">
                               {h.actual_progress.toFixed(0)}%
                             </span>
-                            <HistoryStatusDot isApproved={h.is_approved} />
+                            <span className={cn("text-[10px] font-semibold shrink-0",
+                              h.is_approved === true  ? "text-green-600" :
+                              h.is_approved === false ? "text-red-500"   : "text-yellow-600"
+                            )}>
+                              {h.is_approved === true ? "Disetujui" : h.is_approved === false ? "Ditolak" : "Menunggu"}
+                            </span>
                           </div>
+                          {/* Line 2: weather + workers + notes */}
+                          <div className="flex items-center gap-1.5 text-[10px] text-gray-400 flex-wrap">
+                            <W.Icon className={cn("w-3 h-3 shrink-0", W.cls)} />
+                            <span>{W.label}</span>
+                            <span className="text-gray-300">·</span>
+                            <Users className="w-3 h-3 shrink-0" />
+                            <span>{h.labor_count} orang</span>
+                            {h.notes && (
+                              <>
+                                <span className="text-gray-300">·</span>
+                                <span className="italic">{h.notes}</span>
+                              </>
+                            )}
+                          </div>
+                          {/* Photos — tap to lightbox */}
+                          {h.photos.length > 0 && (
+                            <div className="flex gap-2 flex-wrap">
+                              {h.photos.map((ph) => (
+                                <button
+                                  key={ph.id}
+                                  onClick={() => setLightboxUrl(ph.public_url)}
+                                  className="group shrink-0"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={ph.public_url}
+                                    alt={ph.caption ?? ""}
+                                    className="w-16 h-16 object-cover rounded-xl border border-gray-200 group-hover:opacity-80 transition-opacity"
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -657,6 +782,8 @@ export default function TodayTasksView({
               >
                 {activeForm.status === "submitting" ? (
                   <><span className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin" /> Menyimpan...</>
+                ) : editTargetReportId ? (
+                  <><Edit2 className="w-4 h-4" /> Perbarui Laporan</>
                 ) : isOnline ? (
                   <><Check className="w-4 h-4" /> Kirim Laporan</>
                 ) : (
@@ -733,26 +860,29 @@ interface WbsCardProps {
   latestReport: SubmittedReport | null;
   latestTodayReport: SubmittedReport | null;
   todayCount: number;
+  history: SubmittedReport[];
+  today: string;
   onOpen: () => void;
+  onEditReport: (report: SubmittedReport) => void;
 }
 
-function WbsCard({ item, form, latestReport, latestTodayReport, todayCount, onOpen }: WbsCardProps) {
-  // Display progress from the latest submitted report (not WBS table which only reflects approved)
+function WbsCard({ item, form, latestReport, latestTodayReport, todayCount, history, today, onOpen, onEditReport }: WbsCardProps) {
   const displayProgress = latestReport?.actual_progress ?? item.actual_progress;
-
   const isRejected = latestTodayReport?.is_approved === false;
-  const isPending = latestTodayReport?.is_approved === null;
+  const isPending  = latestTodayReport?.is_approved === null;
   const isApproved = latestTodayReport?.is_approved === true;
 
   const borderColor =
-    form.status === "offline_saved"  ? "border-blue-200 bg-blue-50/30"  :
-    isRejected                        ? "border-red-200 bg-red-50/20"    :
-    isPending && todayCount > 0       ? "border-yellow-200 bg-yellow-50/20" :
-    isApproved                        ? "border-green-200 bg-green-50/30":
+    form.status === "offline_saved"  ? "border-blue-200 bg-blue-50/30"      :
+    isRejected                        ? "border-red-200 bg-red-50/20"        :
+    isPending && todayCount > 0       ? "border-yellow-200 bg-yellow-50/20"  :
+    isApproved                        ? "border-green-200 bg-green-50/30"    :
     "border-gray-100 bg-white";
 
   return (
     <div className={cn("rounded-2xl border shadow-sm overflow-hidden transition-all", borderColor)}>
+
+      {/* ── Clickable main area ── */}
       <button
         onClick={onOpen}
         className="w-full text-left px-4 py-4 flex items-start gap-3 hover:bg-black/[0.02] transition-colors"
@@ -771,13 +901,13 @@ function WbsCard({ item, form, latestReport, latestTodayReport, todayCount, onOp
             {todayCount > 0 && (
               <span className={cn(
                 "inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full",
-                isRejected  ? "bg-red-100 text-red-700"    :
-                isApproved  ? "bg-green-100 text-green-700" :
-                              "bg-yellow-50 text-yellow-700"
+                isRejected ? "bg-red-100 text-red-700"     :
+                isApproved ? "bg-green-100 text-green-700"  :
+                             "bg-yellow-50 text-yellow-700"
               )}>
-                {isRejected   ? <><XCircle className="w-2.5 h-2.5" /> Ditolak</> :
-                 isApproved   ? <><CheckCircle className="w-2.5 h-2.5" /> Disetujui</> :
-                                <><Clock className="w-2.5 h-2.5" /> {todayCount} laporan</>}
+                {isRejected ? <><XCircle className="w-2.5 h-2.5" /> Ditolak</>     :
+                 isApproved ? <><CheckCircle className="w-2.5 h-2.5" /> Disetujui</> :
+                              <><Clock className="w-2.5 h-2.5" /> {todayCount} laporan</>}
               </span>
             )}
           </div>
@@ -796,18 +926,10 @@ function WbsCard({ item, form, latestReport, latestTodayReport, todayCount, onOp
               </span>
             </div>
             <div className="relative h-2 bg-gray-100 rounded-full overflow-hidden">
-              {/* Planned marker */}
+              <div className="absolute top-0 bottom-0 w-0.5 bg-gray-300" style={{ left: `${item.planned_progress}%` }} />
               <div
-                className="absolute top-0 bottom-0 w-0.5 bg-gray-300"
-                style={{ left: `${item.planned_progress}%` }}
-              />
-              {/* Actual bar */}
-              <div
-                className={cn(
-                  "h-full rounded-full transition-all",
-                  isRejected  ? "bg-red-400"   :
-                  isApproved  ? "bg-green-500"  :
-                  "bg-brand-500"
+                className={cn("h-full rounded-full transition-all",
+                  isRejected ? "bg-red-400" : isApproved ? "bg-green-500" : "bg-brand-500"
                 )}
                 style={{ width: `${displayProgress}%` }}
               />
@@ -826,21 +948,103 @@ function WbsCard({ item, form, latestReport, latestTodayReport, todayCount, onOp
         {/* CTA */}
         <div className={cn(
           "shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors mt-0.5",
-          form.status === "offline_saved"
-            ? "bg-gray-100 text-gray-500"
-            : isRejected
-            ? "bg-red-50 text-red-600"
-            : todayCount > 0
-            ? "bg-gray-100 text-gray-600"
-            : "bg-brand-500 text-white"
+          form.status === "offline_saved" ? "bg-gray-100 text-gray-500" :
+          isRejected                       ? "bg-red-50 text-red-600"    :
+          todayCount > 0                   ? "bg-gray-100 text-gray-600" :
+          "bg-brand-500 text-white"
         )}>
           {form.status === "offline_saved" ? "Offline" :
-           isRejected                       ? "Perbaiki" :
-           todayCount > 0                   ? "Tambah" :
-           "Laporkan"}
+           isRejected ? "Perbaiki" : todayCount > 0 ? "Tambah" : "Laporkan"}
           <ChevronRight className="w-3.5 h-3.5" />
         </div>
       </button>
+
+      {/* ── Riwayat (outside button so photos/interactive elements are valid) ── */}
+      {history.length > 0 && (
+        <div className="border-t border-gray-100 px-4 pb-4 pt-3 space-y-2">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+            Riwayat {history.length > 7 ? "(7 terbaru)" : `(${history.length})`}
+          </p>
+          {history.slice(0, 7).map((h, idx) => {
+            const olderH = history[idx + 1];
+            const delta = olderH ? h.actual_progress - olderH.actual_progress : null;
+            const W = WEATHER_DISPLAY[h.weather] ?? WEATHER_DISPLAY.berawan;
+            const canEdit = h.is_approved === null || h.is_approved === false;
+            return (
+              <div key={h.id} className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 space-y-1.5">
+                {/* Line 1: status dot + time + delta + progress + status label + edit button */}
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className={cn("w-1.5 h-1.5 rounded-full shrink-0",
+                    h.is_approved === true  ? "bg-green-400" :
+                    h.is_approved === false ? "bg-red-400"   : "bg-yellow-400"
+                  )} />
+                  <span className="text-gray-500 tabular-nums shrink-0">
+                    {h.report_date === today ? formatTime(h.created_at) : formatShortDate(h.report_date)}
+                  </span>
+                  {delta !== null && delta !== 0 && (
+                    <span className={cn("text-[10px] font-bold shrink-0",
+                      delta > 0 ? "text-green-500" : "text-red-400"
+                    )}>
+                      {delta > 0 ? `+${delta.toFixed(0)}%` : `${delta.toFixed(0)}%`}
+                    </span>
+                  )}
+                  <span className="font-bold text-gray-800 tabular-nums ml-auto shrink-0">
+                    {h.actual_progress.toFixed(0)}%
+                  </span>
+                  <span className={cn("text-[10px] font-semibold shrink-0",
+                    h.is_approved === true  ? "text-green-600" :
+                    h.is_approved === false ? "text-red-500"   : "text-yellow-600"
+                  )}>
+                    {h.is_approved === true ? "Disetujui" : h.is_approved === false ? "Ditolak" : "Menunggu"}
+                  </span>
+                  {canEdit && (
+                    <button
+                      onClick={() => onEditReport(h)}
+                      className="w-5 h-5 flex items-center justify-center rounded bg-gray-100 hover:bg-amber-100 text-gray-400 hover:text-amber-600 transition-colors shrink-0"
+                      title="Edit laporan"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                {/* Line 2: weather + workers + notes */}
+                <div className="flex items-center gap-1.5 text-[10px] text-gray-400 flex-wrap">
+                  <W.Icon className={cn("w-3 h-3 shrink-0", W.cls)} />
+                  <span>{W.label}</span>
+                  <span className="text-gray-200">·</span>
+                  <Users className="w-3 h-3 shrink-0" />
+                  <span>{h.labor_count} orang</span>
+                  {h.notes && (
+                    <>
+                      <span className="text-gray-200">·</span>
+                      <span className="italic line-clamp-1 min-w-0">{h.notes}</span>
+                    </>
+                  )}
+                </div>
+                {/* Line 3: photo thumbnails */}
+                {h.photos.length > 0 && (
+                  <div className="flex gap-1.5 flex-wrap pt-0.5">
+                    {h.photos.slice(0, 5).map((ph) => (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        key={ph.id}
+                        src={ph.public_url}
+                        alt={ph.caption ?? ""}
+                        className="w-14 h-14 object-cover rounded-lg border border-gray-200"
+                      />
+                    ))}
+                    {h.photos.length > 5 && (
+                      <div className="w-14 h-14 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
+                        <span className="text-[10px] text-gray-400 font-medium">+{h.photos.length - 5}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

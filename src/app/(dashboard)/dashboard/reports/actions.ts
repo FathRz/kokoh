@@ -57,6 +57,49 @@ export async function submitDailyReport(data: {
   return { success: true, id: (report as unknown as { id: string }).id };
 }
 
+export async function updateDailyReport(reportId: string, data: {
+  actual_progress: number;
+  labor_count: number;
+  weather: string;
+  notes: string;
+}) {
+  const ctx = await getCtx();
+  if ("error" in ctx) return { error: ctx.error };
+
+  const supabase = await createClient();
+
+  const { data: existing } = await supabase
+    .from("daily_reports")
+    .select("id, is_approved, created_by")
+    .eq("id", reportId)
+    .eq("tenant_id", ctx.tenantId)
+    .single();
+
+  const ex = existing as unknown as { id: string; is_approved: boolean | null; created_by: string } | null;
+  if (!ex) return { error: "Laporan tidak ditemukan" };
+  if (ex.created_by !== ctx.userId) return { error: "Tidak dapat mengedit laporan orang lain" };
+  if (ex.is_approved === true) return { error: "Laporan sudah disetujui dan tidak dapat diubah" };
+
+  const { error } = await supabase
+    .from("daily_reports")
+    .update({
+      actual_progress: data.actual_progress,
+      labor_count: data.labor_count,
+      weather: data.weather,
+      notes: data.notes || null,
+      is_approved: null,
+      approved_by: null,
+      approved_at: null,
+      rejection_note: null,
+    } as never)
+    .eq("id", reportId)
+    .eq("tenant_id", ctx.tenantId);
+
+  if (error) return { error: error.message };
+  revalidatePath(PATH);
+  return { success: true };
+}
+
 export async function approveReport(reportId: string) {
   const ctx = await getCtx();
   if ("error" in ctx) return { error: ctx.error };
