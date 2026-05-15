@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import {
   Sun, Cloud, CloudRain, Zap,
   Plus, Minus, Check, AlertCircle, WifiOff, RefreshCw,
-  ClipboardList, Camera, X, ChevronDown, ChevronUp, Users,
+  ClipboardList, Camera, X, Users, ChevronRight,
+  TrendingUp, Clock, CheckCircle, XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { submitDailyReport, saveReportPhoto } from "./actions";
@@ -15,13 +16,13 @@ import PhotoCapture from "./PhotoCapture";
 import { createClient } from "@/lib/supabase/client";
 
 const WEATHER_OPTIONS = [
-  { value: "cerah", label: "Cerah", icon: Sun, color: "text-yellow-500 bg-yellow-50 border-yellow-200" },
-  { value: "berawan", label: "Berawan", icon: Cloud, color: "text-gray-500 bg-gray-50 border-gray-200" },
-  { value: "hujan_ringan", label: "Hujan", icon: CloudRain, color: "text-blue-500 bg-blue-50 border-blue-200" },
-  { value: "hujan_lebat", label: "Deras", icon: Zap, color: "text-indigo-500 bg-indigo-50 border-indigo-200" },
+  { value: "cerah",        label: "Cerah",   icon: Sun,       color: "text-yellow-500 bg-yellow-50 border-yellow-300" },
+  { value: "berawan",      label: "Berawan", icon: Cloud,     color: "text-gray-500 bg-gray-50 border-gray-300" },
+  { value: "hujan_ringan", label: "Hujan",   icon: CloudRain, color: "text-blue-500 bg-blue-50 border-blue-300" },
+  { value: "hujan_lebat",  label: "Deras",   icon: Zap,       color: "text-indigo-500 bg-indigo-50 border-indigo-300" },
 ] as const;
 
-type ItemStatus = "idle" | "submitting" | "success" | "error" | "offline_saved";
+type ItemStatus = "idle" | "submitting" | "offline_saved" | "error";
 type PhotoEntry = ReportPhoto & { caption: string };
 
 interface ItemForm {
@@ -29,7 +30,6 @@ interface ItemForm {
   notes: string;
   status: ItemStatus;
   errorMsg: string;
-  expanded: boolean;
   photos: PhotoEntry[];
   reportId: string | null;
 }
@@ -44,23 +44,46 @@ interface Props {
   today: string;
 }
 
+function formatTime(isoStr: string) {
+  return new Date(isoStr).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatShortDate(dateStr: string) {
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+}
+
 export default function TodayTasksView({
   userId, tenantId, projects, todayWbsItems, submittedToday, reportHistory, today,
 }: Props) {
   const router = useRouter();
   const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? "");
-  const [weather, setWeather] = useState<string>("cerah");
-  const [laborCount, setLaborCount] = useState(1);
+  const [weather, setWeather] = useState(() => submittedToday[0]?.weather ?? "cerah");
+  const [laborCount, setLaborCount] = useState(() => submittedToday[0]?.labor_count ?? 1);
   const [isOnline, setIsOnline] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
-  const [photoTarget, setPhotoTarget] = useState<string | null>(null); // wbs_item_id
+  const [photoTarget, setPhotoTarget] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
 
-  const submittedMap = new Map(submittedToday.map((r) => [r.wbs_item_id ?? "__project__", r]));
+  // Derive: latest report per WBS (reportHistory sorted desc → first match is latest)
+  const latestByWbs = new Map<string, SubmittedReport>();
+  for (const r of reportHistory) {
+    const key = r.wbs_item_id ?? "__project__";
+    if (!latestByWbs.has(key)) latestByWbs.set(key, r);
+  }
 
-  // Group full history by wbs_item_id, sorted newest first
+  // Derive: all today's reports per WBS
+  const todayByWbs: Record<string, SubmittedReport[]> = {};
+  for (const r of submittedToday) {
+    const key = r.wbs_item_id ?? "__project__";
+    if (!todayByWbs[key]) todayByWbs[key] = [];
+    todayByWbs[key].push(r);
+  }
+
+  // Derive: full history per WBS for the riwayat section
   const historyByWbs = reportHistory.reduce<Record<string, SubmittedReport[]>>((acc, r) => {
     const key = r.wbs_item_id ?? "__project__";
     if (!acc[key]) acc[key] = [];
@@ -70,24 +93,20 @@ export default function TodayTasksView({
 
   const filteredItems = todayWbsItems.filter((item) => item.project_id === selectedProjectId);
 
-  // Initialise item forms
+  // ItemForm per WBS — always starts idle so multiple submissions per day are allowed
   const [itemForms, setItemForms] = useState<Record<string, ItemForm>>(() => {
     const map: Record<string, ItemForm> = {};
     for (const item of todayWbsItems) {
-      const submitted = submittedMap.get(item.id);
+      const latest = latestByWbs.get(item.id);
+      const latestIsRejected = latest?.is_approved === false;
       map[item.id] = {
-        newProgress: submitted ? submitted.actual_progress : item.actual_progress,
-        notes: submitted?.notes ?? "",
-        status: submitted ? (submitted.is_approved === false ? "error" : "success") : "idle",
-        errorMsg: submitted?.rejection_note ?? "",
-        expanded: !submitted,
+        newProgress: latest?.actual_progress ?? item.actual_progress,
+        notes: "",
+        status: "idle",
+        errorMsg: latestIsRejected ? (latest?.rejection_note ?? "") : "",
         photos: [],
-        reportId: submitted?.id ?? null,
+        reportId: null,
       };
-      if (submitted) {
-        setWeather(submitted.weather);
-        setLaborCount(submitted.labor_count);
-      }
     }
     return map;
   });
@@ -96,7 +115,16 @@ export default function TodayTasksView({
     setItemForms((prev) => ({ ...prev, [id]: { ...prev[id], [key]: value } }));
   }
 
-  // Online/offline detection
+  // Lock body scroll when sheet is open
+  useEffect(() => {
+    if (activeItemId) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => { document.body.style.overflow = ""; };
+  }, [activeItemId]);
+
   useEffect(() => {
     setIsOnline(navigator.onLine);
     const onOnline = () => { setIsOnline(true); syncQueue(); };
@@ -107,10 +135,9 @@ export default function TodayTasksView({
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Count pending offline items on mount
   useEffect(() => {
     offlineDB.dailyReports
       .where("_sync_status").equals("pending")
@@ -125,9 +152,7 @@ export default function TodayTasksView({
     try {
       const pending = await offlineDB.dailyReports
         .where("_sync_status").equals("pending").toArray();
-
       if (pending.length === 0) { setSyncing(false); setPendingCount(0); return; }
-
       let synced = 0;
       for (const item of pending) {
         const result = await submitDailyReport({
@@ -140,17 +165,11 @@ export default function TodayTasksView({
           notes: item.notes ?? "",
         });
         if (!result?.error) {
-          await offlineDB.dailyReports.update(item.id, {
-            _sync_status: "synced",
-            _server_id: result.id,
-          });
-
-          // Sync offline photos
+          await offlineDB.dailyReports.update(item.id, { _sync_status: "synced", _server_id: result.id });
           const photos = await offlineDB.reportPhotos
             .where("report_local_id").equals(item.id)
             .and((p) => p._sync_status === "pending")
             .toArray();
-
           for (const photo of photos) {
             try {
               const supabase = createClient();
@@ -162,20 +181,15 @@ export default function TodayTasksView({
                 await saveReportPhoto(result.id, filename, photo.caption ?? "");
                 await offlineDB.reportPhotos.update(photo.id, { _sync_status: "synced" });
               }
-            } catch { /* skip failed photo */ }
+            } catch { /* skip */ }
           }
           synced++;
         } else {
-          await offlineDB.dailyReports.update(item.id, {
-            _sync_status: "error",
-            _sync_error: result.error,
-          });
+          await offlineDB.dailyReports.update(item.id, { _sync_status: "error", _sync_error: result.error });
         }
       }
-
-      const remainingPending = await offlineDB.dailyReports
-        .where("_sync_status").equals("pending").count();
-      setPendingCount(remainingPending);
+      const remaining = await offlineDB.dailyReports.where("_sync_status").equals("pending").count();
+      setPendingCount(remaining);
       setSyncMsg(`${synced} laporan berhasil disinkronkan`);
       if (synced > 0) router.refresh();
     } catch {
@@ -188,7 +202,6 @@ export default function TodayTasksView({
   async function handleSubmitItem(wbsItemId: string) {
     const form = itemForms[wbsItemId];
     if (!form) return;
-
     setItemField(wbsItemId, "status", "submitting");
     setItemField(wbsItemId, "errorMsg", "");
 
@@ -203,18 +216,14 @@ export default function TodayTasksView({
     };
 
     if (!isOnline) {
-      // Save to IndexedDB
       const localId = crypto.randomUUID();
       await offlineDB.dailyReports.add({
-        id: localId,
-        ...payload,
-        tenant_id: tenantId,
-        created_by: userId,
+        id: localId, ...payload, tenant_id: tenantId, created_by: userId,
         _sync_status: "pending",
       } as OfflineDailyReport);
       setPendingCount((c) => c + 1);
       setItemField(wbsItemId, "status", "offline_saved");
-      setItemField(wbsItemId, "expanded", false);
+      setActiveItemId(null);
       return;
     }
 
@@ -223,9 +232,19 @@ export default function TodayTasksView({
       setItemField(wbsItemId, "status", "error");
       setItemField(wbsItemId, "errorMsg", result.error);
     } else {
-      setItemField(wbsItemId, "status", "success");
-      setItemField(wbsItemId, "reportId", result.id ?? null);
-      setItemField(wbsItemId, "expanded", false);
+      // Reset to idle so they can submit another update; keep newProgress as the new baseline
+      setItemForms((prev) => ({
+        ...prev,
+        [wbsItemId]: {
+          ...prev[wbsItemId],
+          status: "idle",
+          notes: "",
+          photos: [],
+          errorMsg: "",
+          reportId: result.id ?? null,
+        },
+      }));
+      setActiveItemId(null);
       router.refresh();
     }
   }
@@ -239,6 +258,13 @@ export default function TodayTasksView({
   }
 
   const currentProject = projects.find((p) => p.id === selectedProjectId);
+  const activeItem = activeItemId ? filteredItems.find((i) => i.id === activeItemId) : null;
+  const activeForm = activeItemId ? itemForms[activeItemId] : null;
+  const activeHistory = activeItemId ? (historyByWbs[activeItemId] ?? []) : [];
+  // The progress baseline for "Sebelumnya" hint in the sheet
+  const latestKnownProgress = activeItemId
+    ? (latestByWbs.get(activeItemId)?.actual_progress ?? activeItem?.actual_progress ?? 0)
+    : 0;
 
   if (projects.length === 0) {
     return (
@@ -255,49 +281,46 @@ export default function TodayTasksView({
   }
 
   return (
-    <div className="max-w-lg mx-auto space-y-4 pb-24 md:pb-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">Laporan Harian</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          {new Date(today).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
-        </p>
-      </div>
-
-      {/* Offline/Sync Banner */}
-      {!isOnline && (
-        <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-orange-50 border border-orange-200 text-orange-700 text-sm">
-          <WifiOff className="w-4 h-4 shrink-0" />
-          <span className="font-medium">Mode Offline</span>
-          <span className="text-orange-500">— data tersimpan lokal &amp; disinkronkan saat online</span>
-        </div>
-      )}
-      {pendingCount > 0 && isOnline && (
-        <div className="flex items-center justify-between gap-2.5 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm">
-          <div className="flex items-center gap-2">
-            <RefreshCw className={cn("w-4 h-4 shrink-0", syncing && "animate-spin")} />
-            <span>{pendingCount} laporan menunggu sinkronisasi</span>
-          </div>
-          <button
-            onClick={syncQueue}
-            disabled={syncing}
-            className="text-xs font-semibold underline"
-          >
-            {syncing ? "Menyinkronkan..." : "Sinkronkan"}
-          </button>
-        </div>
-      )}
-      {syncMsg && (
-        <div className="px-4 py-2.5 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm flex items-center gap-2">
-          <Check className="w-4 h-4" />
-          {syncMsg}
-        </div>
-      )}
-
-      {/* Project Selector */}
-      {projects.length > 1 && (
+    <>
+      <div className="max-w-lg mx-auto space-y-4 pb-24 md:pb-6">
+        {/* Header */}
         <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Proyek</label>
+          <h1 className="text-xl font-bold text-gray-900">Laporan Harian</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {new Date(today + "T00:00:00").toLocaleDateString("id-ID", {
+              weekday: "long", day: "numeric", month: "long", year: "numeric",
+            })}
+          </p>
+        </div>
+
+        {/* Offline banner */}
+        {!isOnline && (
+          <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-orange-50 border border-orange-200 text-orange-700 text-sm">
+            <WifiOff className="w-4 h-4 shrink-0" />
+            <span className="font-medium">Mode Offline</span>
+            <span className="text-orange-500 text-xs">— tersimpan lokal, sinkron saat online</span>
+          </div>
+        )}
+        {pendingCount > 0 && isOnline && (
+          <div className="flex items-center justify-between gap-2.5 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm">
+            <div className="flex items-center gap-2">
+              <RefreshCw className={cn("w-4 h-4 shrink-0", syncing && "animate-spin")} />
+              <span>{pendingCount} laporan menunggu sinkronisasi</span>
+            </div>
+            <button onClick={syncQueue} disabled={syncing} className="text-xs font-semibold underline">
+              {syncing ? "Menyinkronkan..." : "Sinkronkan"}
+            </button>
+          </div>
+        )}
+        {syncMsg && (
+          <div className="px-4 py-2.5 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm flex items-center gap-2">
+            <Check className="w-4 h-4" />
+            {syncMsg}
+          </div>
+        )}
+
+        {/* Project selector */}
+        {projects.length > 1 && (
           <select
             value={selectedProjectId}
             onChange={(e) => setSelectedProjectId(e.target.value)}
@@ -307,352 +330,341 @@ export default function TodayTasksView({
               <option key={p.id} value={p.id}>{p.name} ({p.code})</option>
             ))}
           </select>
-        </div>
-      )}
+        )}
 
-      {/* Session: Weather + Workers */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 space-y-4">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Kondisi Lapangan Hari Ini</p>
-
-        {/* Weather */}
+        {/* WBS item cards */}
         <div>
-          <p className="text-sm font-medium text-gray-700 mb-2">Cuaca</p>
-          <div className="grid grid-cols-4 gap-2">
-            {WEATHER_OPTIONS.map(({ value, label, icon: Icon, color }) => (
-              <button
-                key={value}
-                onClick={() => setWeather(value)}
-                className={cn(
-                  "flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 transition-all text-xs font-medium",
-                  weather === value ? color + " border-current" : "border-gray-100 text-gray-500 hover:border-gray-200"
-                )}
-              >
-                <Icon className="w-5 h-5" />
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2.5">
+            Pekerjaan Aktif
+            {currentProject && <span className="ml-1 normal-case font-normal text-gray-400">— {currentProject.name}</span>}
+          </p>
 
-        {/* Labor */}
-        <div>
-          <p className="text-sm font-medium text-gray-700 mb-2">Jumlah Pekerja</p>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setLaborCount((c) => Math.max(0, c - 1))}
-              className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 transition-colors text-gray-700"
-            >
-              <Minus className="w-4 h-4" />
-            </button>
-            <span className="text-2xl font-bold text-gray-900 min-w-[3rem] text-center tabular-nums">
-              {laborCount}
-            </span>
-            <button
-              onClick={() => setLaborCount((c) => c + 1)}
-              className="w-10 h-10 flex items-center justify-center rounded-full bg-brand-100 hover:bg-brand-200 transition-colors text-brand-700"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-            <span className="text-sm text-gray-400">orang</span>
-          </div>
+          {filteredItems.length === 0 ? (
+            <div className="bg-white rounded-xl border border-gray-100 p-10 text-center">
+              <ClipboardList className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+              <p className="text-sm text-gray-400">
+                Tidak ada WBS aktif hari ini.<br />
+                <span className="text-xs">Pastikan tanggal WBS mencakup hari ini.</span>
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredItems.map((item) => {
+                const form = itemForms[item.id];
+                if (!form) return null;
+                const latestReport = latestByWbs.get(item.id) ?? null;
+                const todayReports = todayByWbs[item.id] ?? [];
+                const latestTodayReport = todayReports[0] ?? null;
+
+                return (
+                  <WbsCard
+                    key={item.id}
+                    item={item}
+                    form={form}
+                    latestReport={latestReport}
+                    latestTodayReport={latestTodayReport}
+                    todayCount={todayReports.length}
+                    onOpen={() => setActiveItemId(item.id)}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* WBS Item Cards */}
-      <div>
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Pekerjaan Hari Ini
-          {currentProject && <span className="ml-1 text-gray-400">— {currentProject.name}</span>}
-        </p>
+      {/* Bottom Sheet Overlay */}
+      <div
+        className={cn(
+          "fixed inset-0 z-40 bg-black/50 transition-opacity duration-300",
+          activeItemId ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        )}
+        onClick={() => setActiveItemId(null)}
+      />
 
-        {filteredItems.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-100 p-8 text-center text-sm text-gray-400">
-            Tidak ada item WBS aktif hari ini untuk proyek ini.<br />
-            Pastikan tanggal WBS mencakup hari ini.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {filteredItems.map((item) => {
-              const form = itemForms[item.id];
-              if (!form) return null;
-              const prevProgress = item.actual_progress;
-              const wbsHistory = historyByWbs[item.id] ?? [];
-              // Past reports: exclude today's to avoid duplicate with form state
-              const pastReports = wbsHistory.filter((h) => h.report_date !== today);
+      {/* Bottom Sheet */}
+      <div
+        ref={sheetRef}
+        className={cn(
+          "fixed inset-x-0 bottom-0 z-50 bg-white rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out flex flex-col",
+          "max-h-[92dvh]",
+          activeItemId ? "translate-y-0" : "translate-y-full"
+        )}
+      >
+        {activeItem && activeForm && (
+          <>
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-1 shrink-0">
+              <div className="w-10 h-1 rounded-full bg-gray-300" />
+            </div>
 
-              return (
-                <div
-                  key={item.id}
-                  className={cn(
-                    "bg-white rounded-xl border shadow-sm overflow-hidden transition-all",
-                    form.status === "success" ? "border-green-200" :
-                    form.status === "offline_saved" ? "border-blue-200" :
-                    form.status === "error" ? "border-red-200" :
-                    "border-gray-100"
-                  )}
-                >
-                  {/* Card Header */}
-                  <button
-                    className="w-full flex items-center justify-between px-4 py-3.5 text-left"
-                    onClick={() => setItemField(item.id, "expanded", !form.expanded)}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">
-                          {item.code}
-                        </span>
-                        <StatusBadge status={form.status} />
-                        {pastReports.length > 0 && (
-                          <span className="text-[10px] text-gray-400 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full shrink-0">
-                            {pastReports.length} laporan lalu
-                          </span>
-                        )}
-                      </div>
-                      <p className="font-semibold text-gray-800 mt-1 text-sm leading-snug">{item.name}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Progress terkini: {prevProgress.toFixed(1)}%
-                        {form.newProgress !== prevProgress && (
-                          <span className="text-brand-500 font-medium"> → {form.newProgress.toFixed(1)}%</span>
-                        )}
-                      </p>
-                    </div>
-                    {form.expanded
-                      ? <ChevronUp className="w-4 h-4 text-gray-400 shrink-0 ml-2" />
-                      : <ChevronDown className="w-4 h-4 text-gray-400 shrink-0 ml-2" />
-                    }
-                  </button>
-
-                  {form.status === "error" && form.errorMsg && (
-                    <div className="mx-4 mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                      {form.errorMsg}
-                    </div>
-                  )}
-
-                  {form.expanded && (
-                    <div className="px-4 pb-4 space-y-4 border-t border-gray-50 pt-4">
-                      {/* Progress Slider + Steppers */}
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-sm font-medium text-gray-700">Progress Baru</p>
-                          <span className="text-lg font-bold text-brand-600 tabular-nums">
-                            {form.newProgress.toFixed(0)}%
-                          </span>
-                        </div>
-
-                        {/* Slider */}
-                        <input
-                          type="range"
-                          min={0}
-                          max={100}
-                          step={1}
-                          value={form.newProgress}
-                          onChange={(e) => setItemField(item.id, "newProgress", Number(e.target.value))}
-                          className="w-full h-2 bg-gray-200 rounded-full appearance-none cursor-pointer accent-brand-500"
-                        />
-
-                        {/* Stepper Buttons */}
-                        <div className="flex gap-2 mt-3 flex-wrap">
-                          {[-10, -5, +5, +10, +25].map((delta) => (
-                            <button
-                              key={delta}
-                              onClick={() => adjustProgress(item.id, delta)}
-                              className={cn(
-                                "flex-1 min-w-[3.5rem] py-2 text-xs font-semibold rounded-lg border transition-colors",
-                                delta < 0
-                                  ? "border-gray-200 text-gray-600 hover:bg-gray-50"
-                                  : "border-brand-100 text-brand-600 bg-brand-50 hover:bg-brand-100"
-                              )}
-                            >
-                              {delta > 0 ? `+${delta}%` : `${delta}%`}
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Previous progress reference */}
-                        <div className="mt-3 flex items-center gap-2 text-xs text-gray-400">
-                          <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div className="h-full bg-gray-300 rounded-full" style={{ width: `${prevProgress}%` }} />
-                          </div>
-                          <span>sebelumnya {prevProgress.toFixed(0)}%</span>
-                        </div>
-                      </div>
-
-                      {/* Notes */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                          Catatan Lapangan
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={form.notes}
-                          onChange={(e) => setItemField(item.id, "notes", e.target.value)}
-                          placeholder="Kendala, catatan pekerjaan..."
-                          className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent resize-none"
-                        />
-                      </div>
-
-                      {/* Photos */}
-                      <div>
-                        <p className="text-sm font-medium text-gray-700 mb-2">Foto Progres</p>
-                        {form.photos.length > 0 && (
-                          <div className="flex gap-2 flex-wrap mb-2">
-                            {form.photos.map((photo) => (
-                              <div key={photo.id} className="relative">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={photo.public_url}
-                                  alt={photo.caption}
-                                  className="w-16 h-16 object-cover rounded-lg border border-gray-200"
-                                />
-                                <button
-                                  onClick={() => setItemForms((prev) => ({
-                                    ...prev,
-                                    [item.id]: {
-                                      ...prev[item.id],
-                                      photos: prev[item.id].photos.filter((p) => p.id !== photo.id),
-                                    },
-                                  }))}
-                                  className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white shadow"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <button
-                          onClick={() => setPhotoTarget(item.id)}
-                          disabled={!form.reportId && form.status !== "success"}
-                          className={cn(
-                            "flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg border transition-colors",
-                            form.reportId
-                              ? "border-brand-200 text-brand-600 bg-brand-50 hover:bg-brand-100"
-                              : "border-gray-200 text-gray-400 cursor-not-allowed"
-                          )}
-                        >
-                          <Camera className="w-4 h-4" />
-                          Ambil Foto
-                          {!form.reportId && (
-                            <span className="text-xs">(simpan dulu)</span>
-                          )}
-                        </button>
-                      </div>
-
-                      {/* Progress History */}
-                      {wbsHistory.length > 0 && (
-                        <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 space-y-3">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                            Riwayat Progress
-                          </p>
-                          <div className="space-y-3">
-                            {wbsHistory.slice(0, 7).map((h, idx) => (
-                              <div
-                                key={h.id}
-                                className={cn(
-                                  "space-y-2",
-                                  idx < Math.min(wbsHistory.length, 7) - 1 && "pb-3 border-b border-gray-200"
-                                )}
-                              >
-                                {/* Date + progress bar row */}
-                                <div className="flex items-center gap-2.5 text-xs">
-                                  <span className={cn(
-                                    "shrink-0 w-[72px] tabular-nums",
-                                    h.report_date === today ? "text-brand-600 font-semibold" : "text-gray-500"
-                                  )}>
-                                    {h.report_date === today
-                                      ? "Hari ini"
-                                      : new Date(h.report_date + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "short" })
-                                    }
-                                  </span>
-                                  <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div
-                                      className="h-full rounded-full transition-all"
-                                      style={{
-                                        width: `${h.actual_progress}%`,
-                                        backgroundColor: h.is_approved === true ? "#22c55e" : h.is_approved === false ? "#f87171" : "#60a5fa",
-                                      }}
-                                    />
-                                  </div>
-                                  <span className="font-semibold text-gray-700 w-8 text-right tabular-nums shrink-0">
-                                    {h.actual_progress.toFixed(0)}%
-                                  </span>
-                                  <HistoryStatusDot status={h.is_approved} />
-                                </div>
-
-                                {/* Weather + Labor */}
-                                <div className="flex items-center gap-3 pl-[84px]">
-                                  <WeatherChip weather={h.weather} />
-                                  <span className="flex items-center gap-1 text-xs text-gray-500">
-                                    <Users className="w-3 h-3 shrink-0" />
-                                    {h.labor_count} orang
-                                  </span>
-                                </div>
-
-                                {/* Notes */}
-                                {h.notes && (
-                                  <p className="text-xs text-gray-500 leading-relaxed pl-[84px] italic">
-                                    &ldquo;{h.notes}&rdquo;
-                                  </p>
-                                )}
-
-                                {/* Photos */}
-                                {h.photos.length > 0 && (
-                                  <div className="flex gap-1.5 flex-wrap pl-[84px]">
-                                    {h.photos.map((ph) => (
-                                      <button
-                                        key={ph.id}
-                                        onClick={() => setLightboxUrl(ph.public_url)}
-                                        className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200 shrink-0 hover:opacity-80 transition-opacity"
-                                      >
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img
-                                          src={ph.public_url}
-                                          alt={ph.caption ?? "Foto laporan"}
-                                          className="w-full h-full object-cover"
-                                        />
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                          <div className="flex gap-3 pt-1 text-[10px] text-gray-400">
-                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" /> Disetujui</span>
-                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400 inline-block" /> Menunggu</span>
-                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" /> Ditolak</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Submit */}
-                      <button
-                        onClick={() => handleSubmitItem(item.id)}
-                        disabled={form.status === "submitting"}
-                        className={cn(
-                          "w-full flex items-center justify-center gap-2 py-3 text-sm font-semibold rounded-xl transition-colors",
-                          form.status === "submitting"
-                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                            : isOnline
-                            ? "bg-brand-500 hover:bg-brand-600 text-white"
-                            : "bg-orange-500 hover:bg-orange-600 text-white"
-                        )}
-                      >
-                        {form.status === "submitting" ? (
-                          <><span className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin" /> Menyimpan...</>
-                        ) : isOnline ? (
-                          <><Check className="w-4 h-4" /> Simpan Progress</>
-                        ) : (
-                          <><WifiOff className="w-4 h-4" /> Simpan Offline</>
-                        )}
-                      </button>
-                    </div>
+            {/* Sheet header */}
+            <div className="flex items-start justify-between px-5 py-3 border-b border-gray-100 shrink-0">
+              <div className="min-w-0 pr-3">
+                <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                  <span className="font-mono text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                    {activeItem.code}
+                  </span>
+                  {/* Today's report count chip */}
+                  {(todayByWbs[activeItem.id]?.length ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-600 border border-brand-200">
+                      {todayByWbs[activeItem.id].length} laporan hari ini
+                    </span>
                   )}
                 </div>
-              );
-            })}
-          </div>
+                <p className="font-semibold text-gray-900 text-sm leading-snug">{activeItem.name}</p>
+              </div>
+              <button
+                onClick={() => setActiveItemId(null)}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 transition-colors shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Scrollable body */}
+            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
+
+              {/* Server error */}
+              {activeForm.status === "error" && activeForm.errorMsg && (
+                <div className="px-3 py-2.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>{activeForm.errorMsg}</span>
+                </div>
+              )}
+
+              {/* Kondisi Lapangan */}
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Kondisi Lapangan</p>
+
+                {/* Weather */}
+                <div className="grid grid-cols-4 gap-2">
+                  {WEATHER_OPTIONS.map(({ value, label, icon: Icon, color }) => (
+                    <button
+                      key={value}
+                      onClick={() => setWeather(value)}
+                      className={cn(
+                        "flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 transition-all text-xs font-medium",
+                        weather === value ? color + " border-current" : "border-gray-100 text-gray-400 hover:border-gray-200 bg-white"
+                      )}
+                    >
+                      <Icon className="w-5 h-5" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Workers */}
+                <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2 text-sm text-gray-700 font-medium">
+                    <Users className="w-4 h-4 text-gray-400" />
+                    Jumlah Pekerja
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setLaborCount((c) => Math.max(0, c - 1))}
+                      className="w-9 h-9 flex items-center justify-center rounded-full bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
+                    >
+                      <Minus className="w-4 h-4 text-gray-600" />
+                    </button>
+                    <span className="text-xl font-bold text-gray-900 min-w-[2rem] text-center tabular-nums">
+                      {laborCount}
+                    </span>
+                    <button
+                      onClick={() => setLaborCount((c) => c + 1)}
+                      className="w-9 h-9 flex items-center justify-center rounded-full bg-brand-50 border border-brand-200 hover:bg-brand-100 transition-colors"
+                    >
+                      <Plus className="w-4 h-4 text-brand-600" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Progress Baru</p>
+                  <span className="text-2xl font-bold text-brand-600 tabular-nums">
+                    {activeForm.newProgress.toFixed(0)}%
+                  </span>
+                </div>
+
+                {/* Reference bar */}
+                <div className="space-y-1">
+                  <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-brand-500 rounded-full transition-all duration-200"
+                      style={{ width: `${activeForm.newProgress}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>Sebelumnya: {latestKnownProgress.toFixed(0)}%</span>
+                    <span>Target: {activeItem.planned_progress.toFixed(0)}%</span>
+                  </div>
+                </div>
+
+                {/* Slider */}
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={activeForm.newProgress}
+                  onChange={(e) => setItemField(activeItem.id, "newProgress", Number(e.target.value))}
+                  className="w-full h-2 bg-gray-200 rounded-full appearance-none cursor-pointer accent-brand-500"
+                />
+
+                {/* Steppers */}
+                <div className="flex gap-2">
+                  {[-10, -5, +5, +10, +25].map((delta) => (
+                    <button
+                      key={delta}
+                      onClick={() => adjustProgress(activeItem.id, delta)}
+                      className={cn(
+                        "flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors",
+                        delta < 0
+                          ? "border-gray-200 text-gray-600 hover:bg-gray-50 bg-white"
+                          : "border-brand-100 text-brand-600 bg-brand-50 hover:bg-brand-100"
+                      )}
+                    >
+                      {delta > 0 ? `+${delta}%` : `${delta}%`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                  Catatan Lapangan
+                </label>
+                <textarea
+                  rows={3}
+                  value={activeForm.notes}
+                  onChange={(e) => setItemField(activeItem.id, "notes", e.target.value)}
+                  placeholder="Kendala, catatan pekerjaan, hambatan..."
+                  className="w-full px-3.5 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent resize-none"
+                />
+              </div>
+
+              {/* Photos */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Foto Progres</p>
+                {activeForm.photos.length > 0 && (
+                  <div className="flex gap-2 flex-wrap mb-3">
+                    {activeForm.photos.map((photo) => (
+                      <div key={photo.id} className="relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={photo.public_url}
+                          alt={photo.caption}
+                          className="w-20 h-20 object-cover rounded-xl border border-gray-200"
+                        />
+                        <button
+                          onClick={() => setItemForms((prev) => ({
+                            ...prev,
+                            [activeItem.id]: {
+                              ...prev[activeItem.id],
+                              photos: prev[activeItem.id].photos.filter((p) => p.id !== photo.id),
+                            },
+                          }))}
+                          className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white shadow"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => setPhotoTarget(activeItem.id)}
+                  disabled={!activeForm.reportId}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border transition-colors w-full justify-center",
+                    activeForm.reportId
+                      ? "border-brand-200 text-brand-600 bg-brand-50 hover:bg-brand-100"
+                      : "border-gray-200 text-gray-400 cursor-not-allowed bg-gray-50"
+                  )}
+                >
+                  <Camera className="w-4 h-4" />
+                  {activeForm.reportId ? "Ambil Foto Progres" : "Simpan laporan dulu untuk foto"}
+                </button>
+              </div>
+
+              {/* Riwayat Laporan */}
+              {activeHistory.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2.5">
+                    Riwayat — {activeHistory.length} laporan
+                  </p>
+                  <div className="space-y-2">
+                    {activeHistory.map((h, idx) => {
+                      const olderEntry = activeHistory[idx + 1];
+                      const delta = olderEntry ? h.actual_progress - olderEntry.actual_progress : null;
+                      const isToday = h.report_date === today;
+
+                      return (
+                        <div key={h.id} className="flex items-center gap-3 px-3 py-2.5 bg-gray-50 rounded-xl">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-gray-600">
+                              {isToday
+                                ? `Hari ini ${formatTime(h.created_at)}`
+                                : `${formatShortDate(h.report_date)} ${formatTime(h.created_at)}`
+                              }
+                            </p>
+                            {h.notes && (
+                              <p className="text-[10px] text-gray-400 line-clamp-1 mt-0.5">{h.notes}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {delta !== null && delta !== 0 && (
+                              <span className={cn(
+                                "text-[10px] font-bold",
+                                delta > 0 ? "text-green-500" : "text-red-500"
+                              )}>
+                                {delta > 0 ? `+${delta.toFixed(0)}` : delta.toFixed(0)}%
+                              </span>
+                            )}
+                            <span className="text-sm font-bold text-gray-800 tabular-nums">
+                              {h.actual_progress.toFixed(0)}%
+                            </span>
+                            <HistoryStatusDot isApproved={h.is_approved} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Spacer so submit button is reachable */}
+              <div className="h-2" />
+            </div>
+
+            {/* Sticky submit */}
+            <div className="px-5 py-4 border-t border-gray-100 shrink-0 bg-white">
+              <button
+                onClick={() => handleSubmitItem(activeItem.id)}
+                disabled={activeForm.status === "submitting"}
+                className={cn(
+                  "w-full flex items-center justify-center gap-2 py-4 text-sm font-bold rounded-2xl transition-colors",
+                  activeForm.status === "submitting"
+                    ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                    : isOnline
+                    ? "bg-brand-500 hover:bg-brand-600 text-white shadow-brand-sm"
+                    : "bg-orange-500 hover:bg-orange-600 text-white"
+                )}
+              >
+                {activeForm.status === "submitting" ? (
+                  <><span className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin" /> Menyimpan...</>
+                ) : isOnline ? (
+                  <><Check className="w-4 h-4" /> Kirim Laporan</>
+                ) : (
+                  <><WifiOff className="w-4 h-4" /> Simpan Offline</>
+                )}
+              </button>
+            </div>
+          </>
         )}
       </div>
 
@@ -709,48 +721,134 @@ export default function TodayTasksView({
           onClose={() => setPhotoTarget(null)}
         />
       )}
+    </>
+  );
+}
+
+// ─── WBS Summary Card ──────────────────────────────────────
+
+interface WbsCardProps {
+  item: ReportWbsItem;
+  form: ItemForm;
+  latestReport: SubmittedReport | null;
+  latestTodayReport: SubmittedReport | null;
+  todayCount: number;
+  onOpen: () => void;
+}
+
+function WbsCard({ item, form, latestReport, latestTodayReport, todayCount, onOpen }: WbsCardProps) {
+  // Display progress from the latest submitted report (not WBS table which only reflects approved)
+  const displayProgress = latestReport?.actual_progress ?? item.actual_progress;
+
+  const isRejected = latestTodayReport?.is_approved === false;
+  const isPending = latestTodayReport?.is_approved === null;
+  const isApproved = latestTodayReport?.is_approved === true;
+
+  const borderColor =
+    form.status === "offline_saved"  ? "border-blue-200 bg-blue-50/30"  :
+    isRejected                        ? "border-red-200 bg-red-50/20"    :
+    isPending && todayCount > 0       ? "border-yellow-200 bg-yellow-50/20" :
+    isApproved                        ? "border-green-200 bg-green-50/30":
+    "border-gray-100 bg-white";
+
+  return (
+    <div className={cn("rounded-2xl border shadow-sm overflow-hidden transition-all", borderColor)}>
+      <button
+        onClick={onOpen}
+        className="w-full text-left px-4 py-4 flex items-start gap-3 hover:bg-black/[0.02] transition-colors"
+      >
+        <div className="flex-1 min-w-0">
+          {/* Code + status chip */}
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <span className="font-mono text-[10px] text-gray-400 bg-white border border-gray-200 px-1.5 py-0.5 rounded shrink-0">
+              {item.code}
+            </span>
+            {form.status === "offline_saved" && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                <WifiOff className="w-2.5 h-2.5" /> Offline
+              </span>
+            )}
+            {todayCount > 0 && (
+              <span className={cn(
+                "inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full",
+                isRejected  ? "bg-red-100 text-red-700"    :
+                isApproved  ? "bg-green-100 text-green-700" :
+                              "bg-yellow-50 text-yellow-700"
+              )}>
+                {isRejected   ? <><XCircle className="w-2.5 h-2.5" /> Ditolak</> :
+                 isApproved   ? <><CheckCircle className="w-2.5 h-2.5" /> Disetujui</> :
+                                <><Clock className="w-2.5 h-2.5" /> {todayCount} laporan</>}
+              </span>
+            )}
+          </div>
+
+          {/* Name */}
+          <p className="font-semibold text-gray-900 text-sm leading-snug mb-2">{item.name}</p>
+
+          {/* Progress bar */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-[11px] text-gray-400">
+              <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Aktual</span>
+              <span className="font-semibold text-gray-600">
+                <span className="text-brand-600">{displayProgress.toFixed(0)}%</span>
+                <span className="text-gray-300 mx-1">/</span>
+                {item.planned_progress.toFixed(0)}% target
+              </span>
+            </div>
+            <div className="relative h-2 bg-gray-100 rounded-full overflow-hidden">
+              {/* Planned marker */}
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-gray-300"
+                style={{ left: `${item.planned_progress}%` }}
+              />
+              {/* Actual bar */}
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  isRejected  ? "bg-red-400"   :
+                  isApproved  ? "bg-green-500"  :
+                  "bg-brand-500"
+                )}
+                style={{ width: `${displayProgress}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Rejection note */}
+          {isRejected && latestTodayReport?.rejection_note && (
+            <div className="mt-2 flex items-start gap-1.5 text-xs text-red-600">
+              <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
+              <span className="line-clamp-2">{latestTodayReport.rejection_note}</span>
+            </div>
+          )}
+        </div>
+
+        {/* CTA */}
+        <div className={cn(
+          "shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors mt-0.5",
+          form.status === "offline_saved"
+            ? "bg-gray-100 text-gray-500"
+            : isRejected
+            ? "bg-red-50 text-red-600"
+            : todayCount > 0
+            ? "bg-gray-100 text-gray-600"
+            : "bg-brand-500 text-white"
+        )}>
+          {form.status === "offline_saved" ? "Offline" :
+           isRejected                       ? "Perbaiki" :
+           todayCount > 0                   ? "Tambah" :
+           "Laporkan"}
+          <ChevronRight className="w-3.5 h-3.5" />
+        </div>
+      </button>
     </div>
   );
 }
 
-const WEATHER_MAP: Record<string, { label: string; Icon: React.ElementType; cls: string }> = {
-  cerah:       { label: "Cerah",  Icon: Sun,       cls: "text-yellow-600 bg-yellow-50" },
-  berawan:     { label: "Berawan", Icon: Cloud,     cls: "text-gray-500 bg-gray-100" },
-  hujan_ringan:{ label: "Hujan",  Icon: CloudRain,  cls: "text-blue-600 bg-blue-50" },
-  hujan_lebat: { label: "Deras",  Icon: Zap,        cls: "text-indigo-600 bg-indigo-50" },
-};
+// ─── Helpers ───────────────────────────────────────────────
 
-function WeatherChip({ weather }: { weather: string }) {
-  const w = WEATHER_MAP[weather] ?? { label: weather, Icon: Cloud, cls: "text-gray-500 bg-gray-100" };
-  return (
-    <span className={cn("inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full", w.cls)}>
-      <w.Icon className="w-3 h-3 shrink-0" />
-      {w.label}
-    </span>
-  );
-}
-
-function HistoryStatusDot({ status }: { status: boolean | null }) {
-  if (status === true) return <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" title="Disetujui" />;
-  if (status === false) return <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" title="Ditolak" />;
-  return <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" title="Menunggu persetujuan" />;
-}
-
-function StatusBadge({ status }: { status: ItemStatus }) {
-  if (status === "success") return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">
-      <Check className="w-2.5 h-2.5" /> Tersimpan
-    </span>
-  );
-  if (status === "offline_saved") return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-      <WifiOff className="w-2.5 h-2.5" /> Offline
-    </span>
-  );
-  if (status === "error") return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">
-      <AlertCircle className="w-2.5 h-2.5" /> Ditolak
-    </span>
-  );
-  return null;
+function HistoryStatusDot({ isApproved }: { isApproved: boolean | null }) {
+  if (isApproved === true)  return <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="Disetujui" />;
+  if (isApproved === false) return <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" title="Ditolak" />;
+  return <span className="w-2 h-2 rounded-full bg-yellow-400 shrink-0" title="Menunggu" />;
 }

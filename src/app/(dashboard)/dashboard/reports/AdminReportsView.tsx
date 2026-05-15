@@ -5,10 +5,10 @@ import { useRouter } from "next/navigation";
 import {
   Sun, Cloud, CloudRain, Zap, Check, X, ChevronDown, ChevronUp,
   Users, Filter, CheckCircle, Clock, XCircle, TrendingUp,
-  ClipboardList, CalendarDays,
+  ClipboardList, RotateCcw, FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
-import { approveReport, approveBulk, rejectReport } from "./actions";
+import { approveReport, approveBulk, rejectReport, revokeApproval } from "./actions";
 import type { AdminReport, ReportProject } from "./page";
 
 const WEATHER_LABELS: Record<string, { label: string; Icon: React.ElementType; color: string }> = {
@@ -18,10 +18,22 @@ const WEATHER_LABELS: Record<string, { label: string; Icon: React.ElementType; c
   hujan_lebat:  { label: "Deras",   Icon: Zap,       color: "text-indigo-500" },
 };
 
-function formatDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("id-ID", {
-    weekday: "long", day: "numeric", month: "long", year: "numeric",
-  });
+function formatDateTime(createdAt: string, today: string) {
+  const d = new Date(createdAt);
+  const dateStr = d.toISOString().split("T")[0];
+  const time = d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  if (dateStr === today) return `Hari ini ${time}`;
+  return (
+    d.toLocaleDateString("id-ID", { day: "numeric", month: "short" }) + " " + time
+  );
+}
+
+interface WbsGroup {
+  wbsId: string | null;
+  wbsName: string | null;
+  projectId: string;
+  projectName: string;
+  reports: AdminReport[];
 }
 
 interface Props {
@@ -43,24 +55,9 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
   const [actionMsg, setActionMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [rejectTarget, setRejectTarget] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState("");
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
 
   const canApprove = ["project_manager", "tenant_owner", "superadmin"].includes(userRole);
-
-  const filtered = adminReports.filter((r) => {
-    if (filterProject !== "all" && r.project_id !== filterProject) return false;
-    if (filterStatus === "pending" && r.is_approved !== null) return false;
-    if (filterStatus === "approved" && r.is_approved !== true) return false;
-    if (filterStatus === "rejected" && r.is_approved !== false) return false;
-    return true;
-  });
-
-  // Group by date, newest first
-  const byDate = filtered.reduce<Record<string, AdminReport[]>>((acc, r) => {
-    if (!acc[r.report_date]) acc[r.report_date] = [];
-    acc[r.report_date].push(r);
-    return acc;
-  }, {});
-  const sortedDates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
 
   // Stats (always based on today regardless of filter)
   const todayAll = adminReports.filter((r) => r.report_date === today);
@@ -70,6 +67,44 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
     approved: todayAll.filter((r) => r.is_approved === true).length,
     rejected: todayAll.filter((r) => r.is_approved === false).length,
   };
+
+  // Build WBS groups with project + status filter applied at the report level
+  const wbsGroups: WbsGroup[] = (() => {
+    const groupMap = new Map<string, WbsGroup>();
+    for (const report of adminReports) {
+      if (filterProject !== "all" && report.project_id !== filterProject) continue;
+      if (filterStatus === "pending"  && report.is_approved !== null)  continue;
+      if (filterStatus === "approved" && report.is_approved !== true)  continue;
+      if (filterStatus === "rejected" && report.is_approved !== false) continue;
+
+      const key = `${report.project_id}__${report.wbs_item_id ?? "__none__"}`;
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          wbsId: report.wbs_item_id,
+          wbsName: report.wbs_item_name,
+          projectId: report.project_id,
+          projectName: report.project_name,
+          reports: [],
+        });
+      }
+      groupMap.get(key)!.reports.push(report);
+    }
+    // Sort: project name asc, then WBS name asc (null WBS last)
+    return [...groupMap.values()].sort((a, b) => {
+      const pc = a.projectName.localeCompare(b.projectName, "id");
+      if (pc !== 0) return pc;
+      return (a.wbsName ?? "￿").localeCompare(b.wbsName ?? "￿", "id");
+    });
+  })();
+
+  // Group WBS groups by project for rendering
+  const projectMap = new Map<string, { name: string; groups: WbsGroup[] }>();
+  for (const g of wbsGroups) {
+    if (!projectMap.has(g.projectId)) {
+      projectMap.set(g.projectId, { name: g.projectName, groups: [] });
+    }
+    projectMap.get(g.projectId)!.groups.push(g);
+  }
 
   function refresh() {
     startTransition(() => router.refresh());
@@ -112,6 +147,20 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
       setActionMsg({ type: "success", text: "Laporan ditolak" });
       setRejectTarget(null);
       setRejectNote("");
+      refresh();
+    }
+  }
+
+  async function handleRevoke() {
+    if (!revokeTarget) return;
+    setActionLoading(true);
+    const result = await revokeApproval(revokeTarget);
+    setActionLoading(false);
+    if (result?.error) {
+      setActionMsg({ type: "error", text: result.error });
+    } else {
+      setActionMsg({ type: "success", text: "Persetujuan dibatalkan — laporan kembali ke status menunggu" });
+      setRevokeTarget(null);
       refresh();
     }
   }
@@ -198,91 +247,91 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
           </div>
         </div>
 
-        {/* Reports — grouped by date */}
-        {sortedDates.length === 0 ? (
+        {/* Reports — grouped by project > WBS */}
+        {projectMap.size === 0 ? (
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm text-center py-16">
             <ClipboardList className="w-10 h-10 text-gray-300 mx-auto mb-3" />
             <p className="text-sm text-gray-400">Tidak ada laporan yang sesuai filter</p>
           </div>
         ) : (
-          <div className="space-y-4 relative">
+          <div className="space-y-6 relative">
             {isPending && (
               <div className="absolute inset-0 z-10 bg-white/60 flex items-center justify-center rounded-xl">
                 <div className="w-5 h-5 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
               </div>
             )}
 
-            {sortedDates.map((date) => {
-              const dayReports = byDate[date];
-              const pendingIds = dayReports.filter((r) => r.is_approved === null).map((r) => r.id);
-              const isToday = date === today;
+            {[...projectMap.entries()].map(([projectId, projectData]) => (
+              <div key={projectId}>
+                {/* Project header */}
+                <div className="flex items-center gap-2 mb-3 px-1">
+                  <FolderOpen className="w-4 h-4 text-gray-400 shrink-0" />
+                  <h2 className="text-sm font-bold text-gray-600 uppercase tracking-wide">{projectData.name}</h2>
+                </div>
 
-              // Group by WBS item within the day (for "approve all per WBS" action)
-              const byWbs = dayReports.reduce<Record<string, AdminReport[]>>((acc, r) => {
-                const key = r.wbs_item_id ?? r.id;
-                if (!acc[key]) acc[key] = [];
-                acc[key].push(r);
-                return acc;
-              }, {});
+                {/* WBS groups */}
+                <div className="space-y-3">
+                  {projectData.groups.map((group) => {
+                    const pendingIds = group.reports.filter((r) => r.is_approved === null).map((r) => r.id);
+                    const latestSubmitted = group.reports[0];
+                    const latestApproved = group.reports.find((r) => r.is_approved === true);
 
-              return (
-                <div key={date} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-                  {/* Date header */}
-                  <div className={cn(
-                    "flex items-center justify-between px-5 py-3.5 border-b border-gray-100",
-                    isToday && "bg-brand-50/50"
-                  )}>
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <CalendarDays className={cn("w-4 h-4 shrink-0", isToday ? "text-brand-500" : "text-gray-400")} />
-                      <div className="min-w-0">
-                        <span className={cn("text-sm font-semibold", isToday ? "text-brand-700" : "text-gray-800")}>
-                          {isToday ? "Hari ini — " : ""}{formatDate(date)}
-                        </span>
-                        <span className="ml-2 text-xs text-gray-400">
-                          {dayReports.length} laporan{pendingIds.length > 0 && ` · ${pendingIds.length} menunggu`}
-                        </span>
-                      </div>
-                    </div>
-                    {canApprove && pendingIds.length > 0 && (
-                      <button
-                        onClick={() => handleBulkApprove(pendingIds, `persetujuan massal ${formatDate(date)}`)}
-                        disabled={actionLoading}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50 shrink-0 ml-3"
+                    return (
+                      <div
+                        key={`${group.projectId}__${group.wbsId ?? "none"}`}
+                        className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden"
                       >
-                        <CheckCircle className="w-3.5 h-3.5" />
-                        Setujui Semua ({pendingIds.length})
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Report rows */}
-                  <div className="divide-y divide-gray-50">
-                    {Object.entries(byWbs).map(([wbsKey, wbsReports]) => {
-                      const wbsPendingIds = wbsReports.filter((r) => r.is_approved === null).map((r) => r.id);
-                      const hasMultiplePending = wbsPendingIds.length > 1;
-
-                      return (
-                        <div key={wbsKey}>
-                          {/* WBS sub-header (only if >1 report for same WBS in same day) */}
-                          {hasMultiplePending && (
-                            <div className="flex items-center justify-between px-5 py-2 bg-gray-50/70">
-                              <span className="text-xs text-gray-500 font-medium">
-                                {wbsReports[0].wbs_item_name ?? "Tanpa WBS"} — {wbsPendingIds.length} pending
+                        {/* WBS group header */}
+                        <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-gray-50/60">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold text-gray-800 truncate">
+                              {group.wbsName ?? <span className="italic text-gray-400">Tanpa WBS</span>}
+                            </p>
+                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                              <span className="text-xs text-gray-400">
+                                {group.reports.length} laporan
                               </span>
-                              {canApprove && (
-                                <button
-                                  onClick={() => handleBulkApprove(wbsPendingIds, `WBS ${wbsReports[0].wbs_item_name ?? ""}`)}
-                                  disabled={actionLoading}
-                                  className="text-xs font-semibold text-green-700 hover:text-green-800 underline underline-offset-2 disabled:opacity-50"
-                                >
-                                  Setujui semua WBS ini
-                                </button>
+                              {pendingIds.length > 0 && (
+                                <span className="text-xs font-semibold text-yellow-700 bg-yellow-50 border border-yellow-200 px-1.5 py-0.5 rounded-full">
+                                  {pendingIds.length} menunggu
+                                </span>
+                              )}
+                              {latestApproved && latestSubmitted && (
+                                <span className="text-xs text-gray-400">
+                                  · Disetujui {latestApproved.actual_progress.toFixed(0)}%
+                                  {latestSubmitted.actual_progress !== latestApproved.actual_progress && (
+                                    <span className="text-brand-500 font-medium">
+                                      {" → "}{latestSubmitted.actual_progress.toFixed(0)}% dilaporkan
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                              {!latestApproved && latestSubmitted && (
+                                <span className="text-xs text-gray-400">
+                                  · Terkini {latestSubmitted.actual_progress.toFixed(0)}%
+                                </span>
                               )}
                             </div>
+                          </div>
+                          {canApprove && pendingIds.length > 0 && (
+                            <button
+                              onClick={() => handleBulkApprove(pendingIds, group.wbsName ?? "Tanpa WBS")}
+                              disabled={actionLoading}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50 shrink-0 ml-3"
+                            >
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              Setujui Semua ({pendingIds.length})
+                            </button>
                           )}
+                        </div>
 
-                          {/* Individual report rows */}
-                          {wbsReports.map((report) => {
+                        {/* Report rows */}
+                        <div className="divide-y divide-gray-50">
+                          {group.reports.map((report, idx) => {
+                            const olderReport = group.reports[idx + 1];
+                            const delta = olderReport
+                              ? report.actual_progress - olderReport.actual_progress
+                              : null;
                             const W = WEATHER_LABELS[report.weather] ?? WEATHER_LABELS.berawan;
                             const isExpanded = expandedRow === report.id;
                             const hasDetail = report.photos.length > 0 || !!report.notes;
@@ -290,26 +339,42 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
                             return (
                               <div key={report.id}>
                                 <div className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50/50 transition-colors">
-                                  {/* WBS name */}
+                                  {/* Time + reporter */}
                                   <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-gray-800 truncate">
-                                      {report.wbs_item_name ?? <span className="italic text-gray-400">Tanpa WBS</span>}
+                                    <p className="text-xs font-semibold text-gray-700">
+                                      {formatDateTime(report.created_at, today)}
                                     </p>
-                                    <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
-                                      <Users className="w-3 h-3" />{report.created_by_name}
-                                      <span className="mx-1">·</span>
-                                      <W.Icon className={cn("w-3 h-3", W.color)} />
+                                    <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5 flex-wrap">
+                                      <Users className="w-3 h-3 shrink-0" />
+                                      <span>{report.created_by_name}</span>
+                                      <span className="mx-0.5 text-gray-200">·</span>
+                                      <W.Icon className={cn("w-3 h-3 shrink-0", W.color)} />
                                       <span className={W.color}>{W.label}</span>
-                                      <span className="mx-1">·</span>
-                                      {report.labor_count} orang
+                                      <span className="mx-0.5 text-gray-200">·</span>
+                                      <span>{report.labor_count} orang</span>
                                     </p>
                                   </div>
 
-                                  {/* Progress */}
+                                  {/* Progress + delta */}
                                   <div className="w-20 shrink-0 text-right">
-                                    <p className="text-sm font-bold text-brand-600">{report.actual_progress.toFixed(0)}%</p>
+                                    <div className="flex items-center justify-end gap-1">
+                                      {delta !== null && delta !== 0 && (
+                                        <span className={cn(
+                                          "text-[10px] font-bold",
+                                          delta > 0 ? "text-green-500" : "text-red-500"
+                                        )}>
+                                          {delta > 0 ? `+${delta.toFixed(0)}` : delta.toFixed(0)}%
+                                        </span>
+                                      )}
+                                      <p className="text-sm font-bold text-brand-600">
+                                        {report.actual_progress.toFixed(0)}%
+                                      </p>
+                                    </div>
                                     <div className="h-1.5 bg-gray-100 rounded-full mt-1">
-                                      <div className="h-full bg-brand-500 rounded-full" style={{ width: `${report.actual_progress}%` }} />
+                                      <div
+                                        className="h-full bg-brand-500 rounded-full"
+                                        style={{ width: `${report.actual_progress}%` }}
+                                      />
                                     </div>
                                   </div>
 
@@ -339,6 +404,16 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
                                           <X className="w-4 h-4" />
                                         </button>
                                       </>
+                                    )}
+                                    {canApprove && report.is_approved === true && (
+                                      <button
+                                        onClick={() => { setRevokeTarget(report.id); setActionMsg(null); }}
+                                        disabled={actionLoading}
+                                        title="Batalkan persetujuan"
+                                        className="w-8 h-8 flex items-center justify-center rounded-lg bg-orange-50 text-orange-500 hover:bg-orange-100 transition-colors disabled:opacity-50"
+                                      >
+                                        <RotateCcw className="w-3.5 h-3.5" />
+                                      </button>
                                     )}
                                     {hasDetail && (
                                       <button
@@ -397,12 +472,12 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
                             );
                           })}
                         </div>
-                      );
-                    })}
-                  </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -456,6 +531,41 @@ export default function AdminReportsView({ userRole, projects, adminReports, tod
                 className="flex-1 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors disabled:opacity-60"
               >
                 {actionLoading ? "Menolak..." : "Tolak Laporan"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke Modal */}
+      {revokeTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-5 h-5 text-orange-500" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Batalkan Persetujuan</h3>
+                <p className="text-sm text-gray-500 mt-0.5">Laporan kembali ke status menunggu</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-5">
+              Progress WBS akan dikembalikan ke laporan terakhir yang masih disetujui, atau ke 0% jika tidak ada.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setRevokeTarget(null)}
+                className="flex-1 py-2.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleRevoke}
+                disabled={actionLoading}
+                className="flex-1 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors disabled:opacity-60"
+              >
+                {actionLoading ? "Memproses..." : "Batalkan Persetujuan"}
               </button>
             </div>
           </div>

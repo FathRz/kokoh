@@ -36,47 +36,6 @@ export async function submitDailyReport(data: {
 
   const supabase = await createClient();
 
-  // Upsert: one report per user per wbs_item per day
-  const matchFilter: Record<string, unknown> = {
-    project_id: data.project_id,
-    report_date: data.report_date,
-    created_by: ctx.userId,
-    tenant_id: ctx.tenantId,
-  };
-  if (data.wbs_item_id) matchFilter.wbs_item_id = data.wbs_item_id;
-
-  const { data: existing } = await supabase
-    .from("daily_reports")
-    .select("id, is_approved")
-    .match(matchFilter as never)
-    .maybeSingle();
-
-  const ex = existing as unknown as { id: string; is_approved: boolean | null } | null;
-
-  if (ex) {
-    // Only allow re-submit if not yet approved
-    if (ex.is_approved === true) {
-      return { error: "Laporan sudah disetujui dan tidak dapat diubah" };
-    }
-    const { error } = await supabase
-      .from("daily_reports")
-      .update({
-        actual_progress: data.actual_progress,
-        labor_count: data.labor_count,
-        weather: data.weather,
-        notes: data.notes || null,
-        is_approved: null,
-        approved_by: null,
-        approved_at: null,
-        rejection_note: null,
-      } as never)
-      .eq("id", ex.id);
-
-    if (error) return { error: error.message };
-    revalidatePath(PATH);
-    return { success: true, id: ex.id, updated: true };
-  }
-
   const { data: report, error } = await supabase
     .from("daily_reports")
     .insert({
@@ -137,6 +96,67 @@ export async function approveReport(reportId: string) {
     await supabase
       .from("wbs_items")
       .update({ actual_progress: r.actual_progress } as never)
+      .eq("id", r.wbs_item_id)
+      .eq("tenant_id", ctx.tenantId);
+  }
+
+  revalidatePath(PATH);
+  revalidatePath(`/dashboard/projects/${r.project_id}`);
+  return { success: true };
+}
+
+export async function revokeApproval(reportId: string) {
+  const ctx = await getCtx();
+  if ("error" in ctx) return { error: ctx.error };
+  if (!["project_manager", "tenant_owner", "superadmin"].includes(ctx.role)) {
+    return { error: "Tidak memiliki akses" };
+  }
+
+  const supabase = await createClient();
+
+  const { data: rawReport } = await supabase
+    .from("daily_reports")
+    .select("id, wbs_item_id, project_id, is_approved")
+    .eq("id", reportId)
+    .eq("tenant_id", ctx.tenantId)
+    .single();
+
+  const r = rawReport as unknown as {
+    id: string; wbs_item_id: string | null; project_id: string; is_approved: boolean | null;
+  } | null;
+  if (!r) return { error: "Laporan tidak ditemukan" };
+  if (r.is_approved !== true) return { error: "Hanya laporan yang sudah disetujui yang bisa dibatalkan" };
+
+  // Revert to pending
+  const { error } = await supabase
+    .from("daily_reports")
+    .update({
+      is_approved: null,
+      approved_by: null,
+      approved_at: null,
+      rejection_note: null,
+    } as never)
+    .eq("id", reportId)
+    .eq("tenant_id", ctx.tenantId);
+
+  if (error) return { error: error.message };
+
+  // S-Curve re-sync: find latest remaining approved report for this WBS
+  if (r.wbs_item_id) {
+    const { data: latestApproved } = await supabase
+      .from("daily_reports")
+      .select("actual_progress, report_date")
+      .eq("wbs_item_id", r.wbs_item_id)
+      .eq("tenant_id", ctx.tenantId)
+      .eq("is_approved", true)
+      .order("report_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const la = latestApproved as unknown as { actual_progress: number } | null;
+    await supabase
+      .from("wbs_items")
+      .update({ actual_progress: la?.actual_progress ?? 0 } as never)
       .eq("id", r.wbs_item_id)
       .eq("tenant_id", ctx.tenantId);
   }

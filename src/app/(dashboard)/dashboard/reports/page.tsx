@@ -26,6 +26,7 @@ export type SubmittedReport = {
   id: string;
   wbs_item_id: string | null;
   report_date: string;
+  created_at: string;
   actual_progress: number;
   labor_count: number;
   weather: string;
@@ -42,6 +43,7 @@ export type AdminReport = {
   wbs_item_id: string | null;
   wbs_item_name: string | null;
   report_date: string;
+  created_at: string;
   actual_progress: number;
   labor_count: number;
   weather: string;
@@ -128,14 +130,15 @@ export default async function ReportsPage() {
 
   const { data: rawHistory } = await supabase
     .from("daily_reports")
-    .select("id, wbs_item_id, report_date, actual_progress, labor_count, weather, notes, is_approved, rejection_note, daily_report_photos(id, storage_path, caption)")
+    .select("id, wbs_item_id, report_date, created_at, actual_progress, labor_count, weather, notes, is_approved, rejection_note, daily_report_photos(id, storage_path, caption)")
     .eq("tenant_id", profile.tenant_id)
     .eq("created_by", user.id)
     .gte("report_date", thirtyDaysAgo)
-    .order("report_date", { ascending: false });
+    .order("report_date", { ascending: false })
+    .order("created_at", { ascending: false });
 
   type RawHistoryItem = {
-    id: string; wbs_item_id: string | null; report_date: string;
+    id: string; wbs_item_id: string | null; report_date: string; created_at: string;
     actual_progress: number; labor_count: number; weather: string;
     notes: string | null; is_approved: boolean | null; rejection_note: string | null;
     daily_report_photos: { id: string; storage_path: string; caption: string | null }[];
@@ -147,6 +150,7 @@ export default async function ReportsPage() {
       id: item.id,
       wbs_item_id: item.wbs_item_id,
       report_date: item.report_date,
+      created_at: item.created_at,
       actual_progress: item.actual_progress,
       labor_count: item.labor_count,
       weather: item.weather,
@@ -175,7 +179,7 @@ export default async function ReportsPage() {
       .from("daily_reports")
       .select(`
         id, project_id, wbs_item_id, report_date, actual_progress,
-        labor_count, weather, notes, is_approved, rejection_note, created_by,
+        labor_count, weather, notes, is_approved, rejection_note, created_by, created_at,
         projects(name),
         wbs_items(name),
         profiles!created_by(full_name),
@@ -188,7 +192,7 @@ export default async function ReportsPage() {
       .limit(100);
 
     type RawReport = {
-      id: string; project_id: string; wbs_item_id: string | null; report_date: string;
+      id: string; project_id: string; wbs_item_id: string | null; report_date: string; created_at: string;
       actual_progress: number; labor_count: number; weather: string; notes: string | null;
       is_approved: boolean | null; rejection_note: string | null; created_by: string;
       projects: { name: string } | null;
@@ -214,6 +218,7 @@ export default async function ReportsPage() {
         wbs_item_id: report.wbs_item_id,
         wbs_item_name: report.wbs_items?.name ?? null,
         report_date: report.report_date,
+        created_at: report.created_at,
         actual_progress: report.actual_progress,
         labor_count: report.labor_count,
         weather: report.weather,
